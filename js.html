@@ -1,6 +1,9 @@
 <script>
-    // Configuration
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyG7j1HBNUcLs2iKJVJVt0JMAcjyKzxIAyHUdQTCNYGcmKqu4UZz0hs9MEKkMKLBgvg7g/exec";
+    // === CONFIGURATION ===
+    // const SCRIPT_URL = ''; // Removed: Using Native google.script.run
+    const SHEET_ID = "1nvpC81OISBQmNdQ2RV7i1w72H_Rkbv_9WNsaqxMTd6A"; // Keep for reference if needed, but backend handles it
+
+    // State
     let products = [];
     let orders = [];
     let cart = [];
@@ -124,31 +127,86 @@
         }
     }
 
-    function jsonpRequest(url, callback) {
-        const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-        window[callbackName] = function (data) {
-            delete window[callbackName];
-            document.body.removeChild(script);
-            callback(data);
-        };
-        const script = document.createElement('script');
-        script.src = `${url}${(url.includes('?') ? '&' : '?')}callback=${callbackName}`;
-        document.body.appendChild(script);
-    }
+    // === API HANDLER (Native GAS) ===
+    function serverCall(funcName, data = null) {
+        return new Promise((resolve, reject) => {
+            const runner = google.script.run
+                .withSuccessHandler(resolve)
+                .withFailureHandler(error => {
+                    console.error('Server Error:', error);
+                    // Hide loader if error
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    Swal.fire('ข้อผิดพลาด', 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้: ' + error.message, 'error');
+                    reject(error);
+                });
 
-    function checkSystemStatus() {
-        jsonpRequest(`${SCRIPT_URL}?action=getProducts`, data => {
-            if (Array.isArray(data)) {
-                // System is initialized
-                document.getElementById('init-prompt').style.display = 'none';
-                document.getElementById('pos-system').style.display = 'block';
-                fetchAllData();
+            if (data !== null) {
+                runner[funcName](data);
             } else {
-                // System not initialized
-                document.getElementById('init-prompt').style.display = 'block';
-                document.getElementById('pos-system').style.display = 'none';
+                runner[funcName]();
             }
         });
+    }
+
+    // === SYSTEM INITIALIZATION ===
+    function checkSystemStatus() {
+        // Try cache first for immediate UI
+        const cachedProducts = loadFromCache('products');
+        if (cachedProducts && cachedProducts.length > 0) {
+            hideLoader();
+            return;
+        }
+
+        serverCall('getProducts')
+            .then(data => {
+                if (!data || data.length === 0) {
+                    // Empty system
+                    hideLoader();
+                    showInitPrompt();
+                } else {
+                    // System ready
+                    hideLoader();
+                    document.getElementById('init-prompt').style.display = 'none';
+                    document.getElementById('pos-system').style.display = 'block';
+                    fetchAllData();
+                }
+            })
+            .catch(err => {
+                hideLoader();
+                // If error, maybe empty
+                showInitPrompt();
+            });
+    }
+
+    function hideLoader() {
+        const loader = document.getElementById('loading-overlay');
+        if (loader) {
+            loader.style.opacity = '0';
+            setTimeout(() => {
+                loader.style.display = 'none';
+            }, 500);
+        }
+    }
+
+    function showInitPrompt() {
+        document.getElementById('pos-system').style.display = 'none';
+
+        const initDiv = document.createElement('div');
+        initDiv.id = 'init-prompt';
+        initDiv.className = 'd-flex align-items-center justify-content-center vh-100';
+        initDiv.innerHTML = `
+            <div class="text-center p-5 bg-surface rounded shadow-lg border border-secondary" style="max-width: 500px;">
+                <div class="mb-4 text-warning">
+                    <i class="bi bi-exclamation-triangle-fill" style="font-size: 3rem;"></i>
+                </div>
+                <h3 class="fw-bold mb-3">ไม่พบข้อมูลในระบบ</h3>
+                <p class="text-secondary mb-4">ดูเหมือนว่าจะเป็นการใช้งานครั้งแรก หรือฐานข้อมูลว่างเปล่า</p>
+                <button onclick="initializePOSSystem()" class="btn btn-primary btn-lg w-100 py-3 rounded-pill fw-bold hover-scale shadow-glow">
+                    <i class="bi bi-rocket-takeoff me-2"></i> เริ่มต้นระบบ POS (สร้างข้อมูลตัวอย่าง)
+                </button>
+            </div>
+        `;
+        document.body.appendChild(initDiv);
     }
 
     function initializePOSSystem() {
@@ -158,7 +216,7 @@
             didOpen: () => Swal.showLoading()
         });
 
-        jsonpRequest(`${SCRIPT_URL}?action=initializePOS`, response => {
+        serverCall('createPOSSheets').then(response => {
             if (response.success) {
                 Swal.fire({
                     icon: 'success',
@@ -176,11 +234,11 @@
                         </div>
                     `,
                     confirmButtonText: 'ตกลง'
+                }).then(() => {
+                    document.getElementById('init-prompt').style.display = 'none';
+                    document.getElementById('pos-system').style.display = 'block';
+                    fetchAllData();
                 });
-
-                document.getElementById('init-prompt').style.display = 'none';
-                document.getElementById('pos-system').style.display = 'block';
-                fetchAllData();
             } else {
                 Swal.fire({
                     icon: 'error',
@@ -216,7 +274,7 @@
             }
         }
 
-        jsonpRequest(`${SCRIPT_URL}?action=getProducts`, data => {
+        serverCall('getProducts').then(data => {
             products = data;
             saveToCache('products', data); // Save to cache
 
@@ -244,7 +302,7 @@
             }
         }
 
-        jsonpRequest(`${SCRIPT_URL}?action=getOrders`, data => {
+        serverCall('getOrders').then(data => {
             const newOrders = data.reverse(); // Show newest first
 
             // Basic diff check could be done here, but for now just overwrite
@@ -267,7 +325,7 @@
             updateSettingsUI();
         }
 
-        jsonpRequest(`${SCRIPT_URL}?action=getSettings`, data => {
+        serverCall('getSettings').then(data => {
             settings = data;
             saveToCache('settings', data);
             updateSettingsUI();
@@ -278,15 +336,15 @@
     }
 
     function fetchDashboardStats() {
-        jsonpRequest(`${SCRIPT_URL}?action=getDashboardStats`, response => {
+        serverCall('getDashboardStats').then(response => {
             if (response.result === 'success') {
-                renderDashboard(response.stats);
+                updateAdminDashboard(response.stats);
             }
         });
     }
 
     function fetchInventoryLog() {
-        jsonpRequest(`${SCRIPT_URL}?action=getInventoryLog`, data => {
+        serverCall('getInventoryLog').then(data => {
             renderInventoryLogTable(data);
         });
     }
@@ -657,13 +715,6 @@
             confirmButtonColor: '#10b981'
         }).then((result) => {
             if (result.isConfirmed) {
-                // Show loading
-                Swal.fire({
-                    title: 'กำลังบันทึก...',
-                    allowOutsideClick: false,
-                    didOpen: () => Swal.showLoading()
-                });
-
                 // Prepare data
                 const orderData = {
                     items: JSON.stringify(cart.map(item => ({
@@ -676,41 +727,49 @@
                     notes: notes,
                     status: 'completed'
                 };
+                createNewOrder(orderData);
+            }
+        });
+    }
 
-                // Send to backend
-                let url = `${SCRIPT_URL}?action=createOrder`;
-                Object.keys(orderData).forEach(key => {
-                    url += `&${encodeURIComponent(key)}=${encodeURIComponent(orderData[key])}`;
+    function createNewOrder(orderData) {
+        Swal.fire({
+            title: 'กำลังบันทึกคำสั่งซื้อ...',
+            allowOutsideClick: false,
+            didOpen: () => Swal.showLoading()
+        });
+
+        serverCall('createOrder', orderData).then(response => {
+            if (response.result === 'success') {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'สำเร็จ!',
+                    html: `
+                    <div class="text-start">
+                        <p>สร้างคำสั่งซื้อสำเร็จ</p>
+                        <p><strong>หมายเลขคำสั่งซื้อ:</strong> ${response.orderId}</p>
+                        <p><strong>ยอดรวม:</strong> ${formatCurrency(response.total)}</p>
+                        <p><strong>วันที่:</strong> ${new Date().toLocaleString('th-TH')}</p>
+                    </div>
+                    `,
+                    showConfirmButton: false,
+                    timer: 3000
                 });
 
-                jsonpRequest(url, response => {
-                    if (response.result === 'success') {
-                        cart = [];
-                        document.getElementById('order-notes').value = '';
-                        updateCartUI();
+                // Refresh data
+                fetchProducts();
+                fetchOrders();
+                fetchInventoryLog();
+                fetchDashboardStats();
 
-                        Swal.fire({
-                            icon: 'success',
-                            title: 'ชำระเงินสำเร็จ!',
-                            text: `หมายเลขคำสั่งซื้อ: ${response.orderId}`,
-                            showCancelButton: true,
-                            confirmButtonText: 'ตกลง',
-                            cancelButtonText: 'ปิด'
-                        });
+                // Clear UI cart
+                cart = [];
+                document.getElementById('order-notes').value = '';
+                updateCartUI();
 
-                        // Refresh data
-                        fetchProducts(); // Stock changed
-                        fetchOrders();   // New order
-                        fetchInventoryLog();
-                        fetchDashboardStats();
-                    } else {
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'เกิดข้อผิดพลาด',
-                            text: response.message
-                        });
-                    }
-                });
+                // Print receipt logic (Optional)
+            } else {
+                Swal.fire('ผิดพลาด', response.message, 'error');
             }
         });
     }
@@ -736,7 +795,7 @@
             let itemNames = '';
             try {
                 const items = JSON.parse(order.items);
-                itemCount = items.reduce((sum, item) => sum + parseInt(item.quantity), 0);
+                itemCount = items.reduce((sum, item => sum + parseInt(item.quantity)), 0);
                 itemNames = items.map(item => item.name).join(', ');
                 if (itemNames.length > 30) itemNames = itemNames.substring(0, 30) + '...';
             } catch (e) {
@@ -821,6 +880,7 @@
 
                 // Load admin data
                 initCharts();
+                // Check if dashboard stats are already loaded (e.g., from cache)
                 if (document.getElementById('admin-total-products').textContent === '0') {
                     fetchDashboardStats();
                     fetchInventoryLog();
@@ -932,7 +992,7 @@
             let itemNames = '';
             try {
                 const items = JSON.parse(order.items);
-                itemCount = items.reduce((sum, item) => sum + parseInt(item.quantity), 0);
+                itemCount = items.reduce((sum, item => sum + parseInt(item.quantity)), 0);
                 itemNames = items.slice(0, 2).map(item => item.name).join(', ') + (items.length > 2 ? '...' : '');
             } catch (e) {
                 console.error('Error parsing order items', e);
@@ -1093,15 +1153,19 @@
         // For now, we use default colors which look good on dark mode
     }
 
-    // Modal helpers (Placeholders)
+    // === ADMIN & INIT FUNCTIONS (IMPLEMENTED) ===
+
     function showAddProductModal() {
         Swal.fire({
             title: 'เพิ่มสินค้าใหม่',
             html: `
-                <input id="new-prod-name" class="swal2-input" placeholder="ชื่อสินค้า">
-                <input id="new-prod-sku" class="swal2-input" placeholder="SKU/Barcode">
-                <input id="new-prod-price" type="number" class="swal2-input" placeholder="ราคา">
-                <input id="new-prod-stock" type="number" class="swal2-input" placeholder="จำนวนสต็อก">
+                <input id="new-prod-name" class="swal2-input" placeholder="ชื่อสินค้า (เช่น น้ำทิพย์)">
+                <input id="new-prod-sku" class="swal2-input" placeholder="รหัส SKU (เช่น W001)">
+                <input id="new-prod-price" type="number" class="swal2-input" placeholder="ราคา (เช่น 10)">
+                <input id="new-prod-stock" type="number" class="swal2-input" placeholder="สต็อก (เช่น 100)">
+                <input id="new-prod-unit" class="swal2-input" placeholder="หน่วย (เช่น ขวด)">
+                <input id="new-prod-cat" class="swal2-input" placeholder="หมวดหมู่ (เช่น เครื่องดื่ม)">
+                <input id="new-prod-img" class="swal2-input" placeholder="ลิงก์รูปภาพ (Optional)">
             `,
             showCancelButton: true,
             confirmButtonText: 'บันทึก',
@@ -1110,13 +1174,90 @@
                     name: document.getElementById('new-prod-name').value,
                     sku: document.getElementById('new-prod-sku').value,
                     price: document.getElementById('new-prod-price').value,
-                    stock: document.getElementById('new-prod-stock').value
+                    stock: document.getElementById('new-prod-stock').value,
+                    unit: document.getElementById('new-prod-unit').value,
+                    category: document.getElementById('new-prod-cat').value,
+                    image: document.getElementById('new-prod-img').value
                 }
             }
         }).then((result) => {
             if (result.isConfirmed) {
-                // In real app, send to backend
-                Swal.fire('บันทึกแล้ว', 'ข้อมูลสินค้าถูกบันทึกเรียบร้อย', 'success');
+                Swal.fire({ title: 'กำลังบันทึก...', didOpen: () => Swal.showLoading() });
+                serverCall('addProduct', result.value).then(res => {
+                    if (res.result === 'success') {
+                        Swal.fire('บันทึกแล้ว', 'เพิ่มสินค้าเรียบร้อย', 'success');
+                        fetchProducts(); // Refresh list
+                    } else {
+                        Swal.fire('ผิดพลาด', res.message, 'error');
+                    }
+                });
+            }
+        });
+    }
+
+    function deleteProduct(productId) {
+        Swal.fire({
+            title: 'ยืนยันการลบ?',
+            text: "คุณต้องการลบสินค้านี้ใช่หรือไม่? การกระทำนี้ไม่สามารถเรียกคืนได้",
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#ef4444',
+            confirmButtonText: 'ใช่, ลบเลย!',
+            cancelButtonText: 'ยกเลิก'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                serverCall('deleteProduct', productId).then(res => {
+                    if (res.result === 'success') {
+                        Swal.fire('ลบแล้ว!', 'ลบสินค้าเรียบร้อยแล้ว', 'success');
+                        fetchProducts();
+                    } else {
+                        Swal.fire('ผิดพลาด', res.message, 'error');
+                    }
+                });
+            }
+        });
+    }
+
+    function editProduct(productId) {
+        const p = products.find(x => x.id === productId);
+        if (!p) return;
+
+        Swal.fire({
+            title: 'แก้ไขสินค้า',
+            html: `
+                <input id="edit-prod-name" class="swal2-input" value="${p.name}" placeholder="ชื่อสินค้า">
+                <input id="edit-prod-sku" class="swal2-input" value="${p.sku}" placeholder="SKU">
+                <input id="edit-prod-price" type="number" class="swal2-input" value="${p.price}" placeholder="ราคา">
+                <input id="edit-prod-stock" type="number" class="swal2-input" value="${p.stock}" placeholder="สต็อก">
+                <input id="edit-prod-unit" class="swal2-input" value="${p.unit || ''}" placeholder="หน่วย">
+                <input id="edit-prod-cat" class="swal2-input" value="${p.category || ''}" placeholder="หมวดหมู่">
+                <input id="edit-prod-img" class="swal2-input" value="${p.image || ''}" placeholder="ลิงก์รูปภาพ">
+            `,
+            showCancelButton: true,
+            confirmButtonText: 'อัปเดต',
+            preConfirm: () => {
+                return {
+                    id: productId,
+                    name: document.getElementById('edit-prod-name').value,
+                    sku: document.getElementById('edit-prod-sku').value,
+                    price: document.getElementById('edit-prod-price').value,
+                    stock: document.getElementById('edit-prod-stock').value,
+                    unit: document.getElementById('edit-prod-unit').value,
+                    category: document.getElementById('edit-prod-cat').value,
+                    image: document.getElementById('edit-prod-img').value,
+                    min_stock: p.min_stock // Preserve existing min_stock if not edited
+                }
+            }
+        }).then((result) => {
+            if (result.isConfirmed) {
+                serverCall('updateProduct', result.value).then(res => {
+                    if (res.result === 'success') {
+                        Swal.fire('สำเร็จ', 'อัปเดตสินค้าเรียบร้อย', 'success');
+                        fetchProducts();
+                    } else {
+                        Swal.fire('ผิดพลาด', res.message, 'error');
+                    }
+                });
             }
         });
     }
@@ -1136,24 +1277,38 @@
             receipt_footer: document.getElementById('receipt-footer').value
         };
 
-        // In real app, send to backend
-        settings = { ...settings, ...newSettings };
-
-        Swal.fire({
-            icon: 'success',
-            title: 'บันทึกสำเร็จ',
-            text: 'การตั้งค่าถูกบันทึกเรียบร้อยแล้ว',
-            timer: 1500
+        serverCall('updateSettings', newSettings).then(res => {
+            if (res.result === 'success') {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'บันทึกสำเร็จ',
+                    text: 'การตั้งค่าถูกบันทึกเรียบร้อยแล้ว',
+                    timer: 1500
+                });
+                fetchSettings(); // Refresh settings state
+            } else {
+                Swal.fire('ผิดพลาด', res.message, 'error');
+            }
         });
     }
 
-    // Export helpers
+    // Export helpers (Mockup for now, could be real CSV later)
     function exportProducts() {
-        Swal.fire('ส่งออกข้อมูล', 'กำลังดาวน์โหลดไฟล์ Excel...', 'info');
+        Swal.fire('Coming Soon', 'ฟีเจอร์นี้กำลังพัฒนา', 'info');
     }
 
     function exportInventory() {
-        Swal.fire('ส่งออกข้อมูล', 'กำลังดาวน์โหลดไฟล์ Excel...', 'info');
+        Swal.fire('Coming Soon', 'ฟีเจอร์นี้กำลังพัฒนา', 'info');
+    }
+
+    // Helper to update dashboard
+    function updateAdminDashboard(stats) {
+        if (!stats) return;
+        document.getElementById('admin-total-sales').innerText = formatCurrency(stats.totalSales);
+        document.getElementById('admin-today-sales').innerText = formatCurrency(stats.todaySales);
+        document.getElementById('admin-total-products').innerText = stats.totalProducts;
+        document.getElementById('admin-low-stock-count').innerText = stats.lowStockProducts;
+        // Note: Chart updates would require getting data series from backend
     }
 
 </script>
