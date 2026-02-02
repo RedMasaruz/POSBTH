@@ -1,0 +1,16 @@
+{
+    "name": "POS System 2026",
+    "short_name": "POS 2026",
+    "start_url": "/index.html",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#0f172a",
+    "orientation": "any",
+    "icons": [
+        {
+            "src": "https://cdn-icons-png.flaticon.com/512/1055/1055644.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}

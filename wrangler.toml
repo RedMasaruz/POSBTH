@@ -1,0 +1,20 @@
+name = "pos-bth-worker"
+main = "src/index.ts"
+compatibility_date = "2024-02-08"
+node_compat = true
+
+# [build]
+# command = "npm install && npm run build"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pos-db"
+database_id = "7987a138-26c5-4f59-bc53-9850265cc269"
+
+# Serve static files (PWA) directly from the worker (experimental) or use Cloudflare Pages
+# For this setup, we will use Worker Sites or just serve 'public' folder via specific route handling if needed
+# But simpler is to host the HTML in the Worker or separate Pages. 
+# We will use the [site] configuration for serving static assets:
+[site]
+bucket = "./public"
+# entry-point = "workers-site"
