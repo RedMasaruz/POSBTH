@@ -1,4 +1,11 @@
+-- Drop tables in reverse dependency order
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS inventory_log; -- Logical dependency (optional)
+DROP TABLE IF EXISTS settings;
 DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS users;
+
 CREATE TABLE products (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -13,7 +20,6 @@ CREATE TABLE products (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-DROP TABLE IF EXISTS orders;
 CREATE TABLE orders (
   id TEXT PRIMARY KEY,
   subtotal DECIMAL(10, 2) NOT NULL,
@@ -24,12 +30,23 @@ CREATE TABLE orders (
   channel TEXT DEFAULT 'POS',
   notes TEXT,
   items TEXT, -- JSON string of items for easy retrieval
+  created_by TEXT, -- Audit: User ID or Username
+  created_by_name TEXT, -- Audit: User Name at time of sale
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   sync_status TEXT DEFAULT 'synced'
 );
 
-DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS users;
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('owner', 'staff', 'dealer_vip', 'dealer')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE order_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id TEXT NOT NULL,
@@ -40,7 +57,6 @@ CREATE TABLE order_items (
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
 
-DROP TABLE IF EXISTS inventory_log;
 CREATE TABLE inventory_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -52,7 +68,6 @@ CREATE TABLE inventory_log (
   reference TEXT
 );
 
-DROP TABLE IF EXISTS settings;
 CREATE TABLE settings (
   key TEXT PRIMARY KEY,
   value TEXT,
@@ -62,13 +77,29 @@ CREATE TABLE settings (
 -- Seed Initial Settings
 INSERT INTO settings (key, value) VALUES 
 ('store_name', 'ร้านค้าตัวอย่าง'),
-('tax_rate', '7'),
+('tax_rate', '0'),
 ('currency', 'THB'),
 ('low_stock_threshold', '10'),
 ('receipt_header', 'ใบเสร็จรับเงิน\nร้านค้าตัวอย่าง'),
 ('receipt_footer', 'ขอบคุณที่ใช้บริการ');
 
+-- Seed Users
+INSERT INTO users (username, password, name, role) VALUES 
+('admin', 'admin1234', 'เจ้าของร้าน', 'owner'),
+('staff', 'staff1234', 'พนักงานขาย', 'staff'),
+('vip', 'vip1234', 'ตัวแทนรายใหญ่', 'dealer_vip'),
+('dealer', 'dealer1234', 'ตัวแทนรายย่อย', 'dealer');
+
 -- Seed Initial Products (Example)
 INSERT INTO products (id, name, sku, price, stock, min_stock, unit, category, image) VALUES
-('P001', 'น้ำดื่ม', 'DRINK001', 10, 100, 20, 'ขวด', 'เครื่องดื่ม', 'https://via.placeholder.com/80x80/0ea5e9/ffffff?text=น้ำ'),
-('P002', 'ขนมปัง', 'FOOD001', 25, 50, 10, 'ถุง', 'อาหาร', 'https://via.placeholder.com/80x80/f59e0b/ffffff?text=ขนม');
+('V001', 'แร่ภูเขาไฟ 500 กรัม', 'VOLCANICMINERAL001', 90, 100, 10, 'ซอง', 'แร่ธาตุ', ''),
+('V002', 'แร่ภูเขาไฟ 1 กิโลกรัม', 'VOLCANICMINERAL002', 140, 100, 10, 'ขวด', 'แร่ธาตุ', ''),
+('V003', 'แร่ภูเขาไฟ 5 กิโลกรัม', 'VOLCANICMINERAL003', 370, 100, 10, 'ถุง', 'แร่ธาตุ', ''),
+('V004', 'แร่ภูเขาไฟ 25 กิโลกรัม', 'VOLCANICMINERAL004', 980, 100, 10, 'กระสอบ', 'แร่ธาตุ', ''),
+('V005', 'หัวเชื้อธาตุอาหาร 16 ชนิด หลัก รอง เสริม 1 ลิตร', 'VOLCANICWATER001', 220, 100, 10, 'ขวด', 'แร่ธาตุ', ''),
+('V006', 'หัวเชื้อธาตุอาหาร 16 ชนิด หลัก รอง เสริม 1 แพ็ค', 'VOLCANICWATER002', 1050, 100, 10, 'ขวด', 'แร่ธาตุ', ''),
+('V007', 'หัวเชื้อธาตุอาหาร 16 ชนิด หลัก รอง เสริม 1 ลัง', 'VOLCANICWATER003', 2050, 100, 10, 'ขวด', 'แร่ธาตุ', ''),
+('P001', 'ฮิวมิค 1 ลิตร', 'HUMIC001', 0, 0, 10, 'ขวด', 'บำรุงดิน', ''),
+('P002', 'จุลินทรีย์ 1 ลิตร', 'MICROBE001', 0, 0, 10, 'ขวด', 'บำรุงดิน', ''),
+('P003', 'ผงถ่าน 1 ลิตร', 'CHARCOAL001', 0, 0, 10, 'ขวด', 'บำรุงดิน', ''),
+('P004', 'นาโน 1 ลิตร', 'NANO001', 0, 0, 10, 'ขวด', 'บำรุงใบ', '');

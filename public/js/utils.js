@@ -1,0 +1,73 @@
+const API_BASE = '/api'; // Cloudflare Worker Endpoint
+let settings = {}; // Global settings object
+
+// Helper: Apply Theme
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('selectedTheme', theme);
+}
+
+// Register Service Worker
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then(registration => {
+                console.log('ServiceWorker registration successful with scope: ', registration.scope);
+            })
+            .catch(err => {
+                console.log('ServiceWorker registration failed: ', err);
+            });
+    });
+}
+
+// Global API Request Helper
+async function apiRequest(endpoint, method = 'GET', body = null) {
+    try {
+        const options = {
+            method,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+        if (body) {
+            options.body = JSON.stringify(body);
+        }
+
+        const response = await fetch(`${API_BASE}${endpoint}`, options);
+        if (!response.ok) {
+            const error = await response.text();
+            let errorMessage = error || response.statusText;
+            try {
+                // Try to parse JSON error
+                const json = JSON.parse(error);
+                errorMessage = json.message || json.error || errorMessage;
+            } catch (e) {
+                // Ignore parse error, use text
+            }
+            throw new Error(errorMessage);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('API Error:', error);
+        // Silent fail for background updates?
+        // But for interactive, we should show alert.
+        // We will show alert if method is NOT GET (likely user action)
+        if (method !== 'GET') {
+            Swal.fire({
+                icon: 'error',
+                title: 'เกิดข้อผิดพลาด',
+                text: error.message || 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้'
+            });
+        }
+        return null;
+    }
+}
+
+// Format Currency
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('th-TH', {
+        style: 'currency',
+        currency: (settings && settings.currency) ? settings.currency : 'THB',
+        minimumFractionDigits: 2
+    }).format(amount || 0);
+}
