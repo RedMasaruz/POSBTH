@@ -11,6 +11,9 @@ CREATE TABLE products (
   name TEXT NOT NULL,
   sku TEXT UNIQUE NOT NULL,
   price DECIMAL(10, 2) NOT NULL,
+  cost DECIMAL(10, 2) DEFAULT 0,
+  price_dealer DECIMAL(10, 2) DEFAULT 0, -- Retail * 0.70 approx
+  price_vip DECIMAL(10, 2) DEFAULT 0,    -- Retail * 0.60 approx
   stock INTEGER DEFAULT 0,
   min_stock INTEGER DEFAULT 10,
   unit TEXT DEFAULT 'ชิ้น',
@@ -36,6 +39,9 @@ CREATE TABLE orders (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   sync_status TEXT DEFAULT 'synced'
 );
+
+-- Optimize queries filtering by date
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
 
 DROP TABLE IF EXISTS users;
 CREATE TABLE users (
@@ -77,7 +83,7 @@ CREATE TABLE settings (
 -- Seed Initial Settings
 INSERT INTO settings (key, value) VALUES 
 ('store_name', 'ร้านค้าตัวอย่าง'),
-('tax_rate', '0'),
+('discount_rate', '0'),
 ('currency', 'THB'),
 ('low_stock_threshold', '10'),
 ('receipt_header', 'ใบเสร็จรับเงิน\nร้านค้าตัวอย่าง'),

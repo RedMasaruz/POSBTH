@@ -1,11 +1,11 @@
 const API_AUTH = '/api/auth/login';
 
 // Check if user is logged in
-function checkSession() {
+function checkSession(shouldRedirect = true) {
     const user = getUser();
     if (!user) {
-        // If not on login page, redirect
-        if (!window.location.pathname.includes('login.html')) {
+        // If not on login page, redirect only if requested
+        if (shouldRedirect && !window.location.pathname.includes('login.html')) {
             window.location.href = '/login.html';
         }
         return false;

@@ -28,6 +28,9 @@ type OrderBody = {
   total?: number;    // For reference/validation only
   userId?: number;   // ID of the user creating the order
   userName?: string; // Name of the user creating the order
+  customer_name?: string;
+  customer_address?: string;
+  customer_phone?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -135,6 +138,161 @@ app.delete('/api/users/:id', async (c) => {
   }
 });
 
+// --- Analytics API ---
+app.get('/api/analytics', async (c) => {
+  try {
+    const startDate = c.req.query('startDate');
+    const endDate = c.req.query('endDate');
+
+    let dateFilter = "";
+    const params: any[] = [];
+
+    if (startDate && endDate) {
+      // Use SQLite date() function for robust YYYY-MM-DD comparison
+      dateFilter = `WHERE date(created_at) >= ? AND date(created_at) <= ?`;
+      params.push(startDate, endDate);
+    }
+
+    const queryParams = params.length > 0 ? params : undefined;
+    const bindQuery = (q: string) => {
+      const stmt = c.env.DB.prepare(q);
+      return params.length > 0 ? stmt.bind(...params) : stmt;
+    };
+
+    // 1. KPIs
+    const kpiQuery = `
+            SELECT 
+                COUNT(id) as totalOrders,
+                SUM(total) as totalSales,
+                AVG(total) as avgOrderValue
+            FROM orders ${dateFilter}
+        `;
+    const kpiResult: any = await bindQuery(kpiQuery).first();
+
+    // 2. Sales Trend (Daily)
+    const trendQuery = `
+            SELECT 
+                STRFTIME('%Y-%m-%d', created_at) as date,
+                SUM(total) as total
+            FROM orders ${dateFilter}
+            GROUP BY date
+            ORDER BY date
+        `;
+    const { results: salesTrend } = await bindQuery(trendQuery).all();
+
+    // 3. Detailed Stats (Top Products, Staff, etc.) via JS Aggregation
+    // 3. Optimized Stats via separate SQL queries (Faster than JS loop)
+
+    // Payment Stats
+    const paymentQuery = `
+        SELECT payment_method as name, COUNT(*) as count 
+        FROM orders ${dateFilter} 
+        GROUP BY payment_method
+    `;
+    const { results: paymentMethods } = await bindQuery(paymentQuery).all();
+
+    // Order Status
+    const statusQuery = `
+        SELECT status, COUNT(*) as count 
+        FROM orders ${dateFilter} 
+        GROUP BY status
+    `;
+    const { results: orderStatus } = await bindQuery(statusQuery).all();
+
+    // Top Staff (By Sales Amount)
+    const staffQuery = `
+        SELECT created_by_name as name, SUM(total) as total 
+        FROM orders ${dateFilter} 
+        GROUP BY created_by_name 
+        ORDER BY total DESC 
+        LIMIT 5
+    `;
+    const { results: topStaff } = await bindQuery(staffQuery).all();
+
+    // Safer Filter for joins
+    const joinFilter = startDate && endDate ? `WHERE date(o.created_at) >= ? AND date(o.created_at) <= ?` : '';
+
+    // Top Products (using order_items + products tables)
+    const finalProductQuery = `
+        SELECT p.name, SUM(oi.quantity) as quantity, SUM(oi.quantity * oi.price_at_time) as total
+        FROM order_items oi
+        JOIN products p ON oi.product_id = p.id
+        JOIN orders o ON oi.order_id = o.id
+        ${joinFilter}
+        GROUP BY p.name
+        ORDER BY quantity DESC
+        LIMIT 5
+    `;
+    const { results: topProducts } = await bindQuery(finalProductQuery).all();
+
+    // Category Sales (using order_items + products)
+    const categoryQuery = `
+        SELECT p.category as name, SUM(oi.quantity * oi.price_at_time) as total
+        FROM order_items oi
+        JOIN products p ON oi.product_id = p.id
+        JOIN orders o ON oi.order_id = o.id
+        ${joinFilter}
+        GROUP BY p.category
+    `;
+    const { results: categorySales } = await bindQuery(categoryQuery).all();
+
+    // Total Products Sold
+    const totalProductsQuery = `
+        SELECT SUM(oi.quantity) as total
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.id
+        ${joinFilter}
+    `;
+    const totalProductsResult: any = await bindQuery(totalProductsQuery).first();
+    const totalProductsSold = totalProductsResult?.total || 0;
+
+    // Gross Profit (Still needs JSON parsing as 'cost' is only in JSON snapshot)
+    // Optimization: Fetch ONLY the items column to reduce bandwidth
+    const profitQuery = `SELECT items FROM orders ${dateFilter}`;
+    const { results: orderItemsBlob } = await bindQuery(profitQuery).all();
+
+    let totalCost = 0;
+    orderItemsBlob.forEach((row: any) => {
+      try {
+        const items = JSON.parse(row.items);
+        items.forEach((item: any) => {
+          totalCost += (item.cost || 0) * item.quantity;
+        });
+      } catch (e) { }
+    });
+
+    const totalSales = kpiResult?.totalSales || 0;
+    const grossProfit = totalSales - totalCost;
+
+    return c.json({
+      debug: {
+        startDate, endDate,
+        dateFilter,
+        params,
+        kpiSQL: kpiQuery,
+        kpiResultRaw: kpiResult
+      },
+      kpi: {
+        totalOrders: kpiResult?.totalOrders || 0,
+        totalSales: totalSales,
+        avgOrderValue: kpiResult?.avgOrderValue || 0,
+        totalProductsSold,
+        totalCost,
+        grossProfit
+      },
+      salesTrend,
+      topProducts,
+      topStaff,
+      categorySales,
+      paymentMethods,
+      orderStatus
+    });
+
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
 // --- Products API ---
 
 // Get all products
@@ -172,10 +330,12 @@ app.post('/api/products', async (c) => {
     if (existing) return errorResponse(c, 'SKU already exists', 400);
 
     await c.env.DB.prepare(
-      `INSERT INTO products (id, name, sku, price, stock, min_stock, unit, category, image) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO products (id, name, sku, price, cost, price_dealer, price_vip, stock, min_stock, unit, category, image) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      id, body.name, body.sku, body.price, body.stock || 0, body.min_stock || 10,
+      id, body.name, body.sku, body.price, body.cost || 0,
+      body.price_dealer || 0, body.price_vip || 0,
+      body.stock || 0, body.min_stock || 10,
       body.unit || 'ชิ้น', body.category || 'ทั่วไป', body.image || ''
     ).run();
 
@@ -197,25 +357,38 @@ app.post('/api/products', async (c) => {
 app.put('/api/products/:id', async (c) => {
   try {
     const id = c.req.param('id');
-    const body = await c.req.json();
+    const body: any = await c.req.json();
 
-    // Validation
-    if (!body.name || !body.sku || body.price === undefined) {
-      return errorResponse(c, 'Missing required fields');
+    if (!id) return errorResponse(c, 'Product ID missing');
+
+    const updates = [];
+    const values = [];
+
+    // Map allowed fields to DB columns
+    const fields = [
+      'name', 'sku', 'price', 'cost', 'price_dealer', 'price_vip',
+      'stock', 'min_stock', 'unit', 'category', 'image'
+    ];
+
+    for (const field of fields) {
+      if (body[field] !== undefined) {
+        updates.push(`${field} = ?`);
+        values.push(body[field]);
+      }
     }
 
-    // Determine Logic: Is this a stock adjustment or a full update?
-    // For simplicity, we update everything provided.
+    if (updates.length === 0) {
+      return errorResponse(c, 'No fields to update');
+    }
 
-    await c.env.DB.prepare(
-      `UPDATE products SET name=?, sku=?, price=?, stock=?, min_stock=?, unit=?, category=?, image=?, updated_at=CURRENT_TIMESTAMP 
-       WHERE id=?`
-    ).bind(
-      body.name, body.sku, body.price, body.stock, body.min_stock,
-      body.unit, body.category, body.image, id
-    ).run();
+    // Always update timestamp
+    updates.push('updated_at = CURRENT_TIMESTAMP');
 
-    // Note: ideally we should log stock changes here too if changed, but we'll leave that for the specific stock adjustment feature or implicit updates.
+    values.push(id); // For WHERE clause
+
+    const query = `UPDATE products SET ${updates.join(', ')} WHERE id = ?`;
+
+    await c.env.DB.prepare(query).bind(...values).run();
 
     return c.json({ success: true, message: 'Product updated' });
   } catch (e: any) {
@@ -260,10 +433,17 @@ app.post('/api/orders', async (c) => {
     let serverSubtotal = 0;
     const validatedItems = [];
 
-    // Fetch all products involved
-    // Note: In a high-traffic production app, fetching all IDs in one query (WHERE id IN (...)) is better.
-    // However, D1/SQLite variable binding limits and the simplicity of this app allow this loop for now.
+    // Determine Pricing Tier
+    let priceField = 'price'; // Default Retail
+    if (body.userId) {
+      const user: any = await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(body.userId).first();
+      if (user) {
+        if (user.role === 'dealer') priceField = 'price_dealer';
+        if (user.role === 'dealer_vip' || user.role === 'vip') priceField = 'price_vip';
+      }
+    }
 
+    // Fetch all products involved
     for (const item of items) {
       if (item.quantity <= 0) continue; // Skip invalid quantities
 
@@ -277,20 +457,25 @@ app.post('/api/orders', async (c) => {
         return errorResponse(c, `Insufficient stock for ${product.name}. Available: ${product.stock}`, 400);
       }
 
-      // Use Server Price
-      const itemTotal = product.price * item.quantity;
+      // Use Server Price based on Tier
+      let finalPrice = product[priceField];
+      // Fallback to retail if tier price is 0/null
+      if (!finalPrice || finalPrice === 0) finalPrice = product.price;
+
+      const itemTotal = finalPrice * item.quantity;
       serverSubtotal += itemTotal;
 
       validatedItems.push({
         ...item,
         name: product.name, // Ensure name is correct
-        price: product.price, // Force server price
+        price: finalPrice, // Force server price
+        cost: product.cost || 0, // Snapshot Cost
         total: itemTotal
       });
     }
 
     // Calculate Discount
-    const setting: any = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'tax_rate'").first();
+    const setting: any = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'discount_rate'").first();
     const discountRate = parseFloat(setting?.value || '0');
     const discount = serverSubtotal * (discountRate / 100);
     const serverTotal = serverSubtotal - discount;
@@ -300,15 +485,18 @@ app.post('/api/orders', async (c) => {
     // 2. Execute Transaction (Batch)
     const statements = [
       c.env.DB.prepare(
-        `INSERT INTO orders (id, subtotal, tax, total, payment_method, status, notes, items, created_by, created_by_name, created_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO orders (id, subtotal, tax, total, payment_method, status, notes, items, created_by, created_by_name, created_at, customer_name, customer_address, customer_phone) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         orderId, serverSubtotal, discount, serverTotal,
         body.payment_method || 'cash', body.status || 'completed', body.notes || '',
         JSON.stringify(validatedItems),
         body.userId ? String(body.userId) : null,
-        body.userName || 'Unknown',
-        new Date().toISOString()
+        body.userName || 'Guest', // created_by_name
+        new Date().toISOString(),
+        body.customer_name || null,
+        body.customer_address || null,
+        body.customer_phone || null
       )
     ];
 

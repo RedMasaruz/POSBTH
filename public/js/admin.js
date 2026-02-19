@@ -72,41 +72,271 @@ function fetchSettings() {
     });
 }
 
-function fetchDashboardStats() {
-    apiRequest('/stats').then(data => {
-        if (data) {
-            renderDashboard({
-                totalSales: data.todaySales || 0,
-                totalProducts: data.products || 0,
-                totalOrders: data.orders || 0,
-                outOfStockProducts: data.lowStock || 0
-            });
+// --- Advanced Dashboard Logic ---
+
+async function fetchDashboardStats(dates) {
+    // Fallback if called without arguments (e.g. initial fetch)
+    if (!dates) {
+        const filter = document.getElementById('date-filter')?.value || 'today';
+        dates = getDateRange(filter);
+    }
+
+    try {
+        const query = dates ? `?startDate=${dates.start}&endDate=${dates.end}` : '';
+        const data = await apiRequest('/analytics' + query);
+
+        if (data && data.kpi) {
+            renderAdvancedDashboard(data);
+        } else {
+            console.warn("Analytics data empty or invalid:", data);
+        }
+    } catch (e) {
+        console.error("Failed to load analytics:", e);
+        Swal.fire('Error', 'Failed to load dashboard data: ' + e.message, 'error');
+    }
+}
+
+
+function getDateRange(filter) {
+    const today = new Date();
+    const formatDate = (date) => date.toISOString().split('T')[0];
+
+    let start = new Date(today);
+    let end = new Date(today);
+
+    if (filter === 'today') {
+        // start and end are today
+    } else if (filter === '7days') {
+        start.setDate(today.getDate() - 7);
+    } else if (filter === '30days') {
+        start.setDate(today.getDate() - 30);
+    } else if (filter === 'this_month') {
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+        end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    }
+
+    return { start: formatDate(start), end: formatDate(end) };
+}
+
+function renderAdvancedDashboard(data) {
+    // 1. KPIs
+    document.getElementById('kpi-total-sales').textContent = formatCurrency(data.kpi.totalSales);
+    document.getElementById('kpi-total-orders').textContent = data.kpi.totalOrders;
+    document.getElementById('kpi-total-products').textContent = data.kpi.totalProductsSold;
+
+    // Profit
+    const profitEl = document.getElementById('kpi-gross-profit');
+    if (profitEl) profitEl.textContent = formatCurrency(data.kpi.grossProfit);
+
+    // 2. Trend Chart
+    renderTrendChart(data.salesTrend);
+
+    // 3. Category & Payment Charts
+    renderCategoryChart(data.categorySales);
+    renderPaymentChart(data.paymentMethods);
+    renderStatusChart(data.orderStatus);
+
+    // 4. Tables
+    renderTopProductsList(data.topProducts);
+    renderStaffPerformance(data.topStaff);
+    // Sync Header Stats
+    const liveSalesEl = document.getElementById('live-sales-today');
+    if (liveSalesEl) liveSalesEl.textContent = formatCurrency(data.kpi.totalSales);
+}
+
+// Restored to prevent ReferenceError in fetchOrders
+function updateLiveStats() {
+    // This function is called by fetchOrders. 
+    // We can leave it empty or use it to refresh dashboard stats if needed.
+    // fetchDashboardStats(); // Optional: Refresh stats when orders change
+}
+
+// Chart Instances Global
+let trendChartInstance = null;
+let categoryChartInstance = null;
+let paymentChartInstance = null;
+
+function renderTrendChart(trendData) {
+    const ctx = document.getElementById('salesTrendChart').getContext('2d');
+
+    if (trendChartInstance) trendChartInstance.destroy();
+
+    const labels = trendData.map(d => formatDateShort(d.date));
+    const values = trendData.map(d => d.total);
+
+    trendChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'ยอดขาย (บาท)',
+                data: values,
+                borderColor: '#4f46e5', // Primary Color
+                backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
         }
     });
 }
 
-function updateLiveStats() {
-    // Live stats for dashboard header if needed, mainly timestamps
+function renderCategoryChart(data) {
+    const ctx = document.getElementById('categoryChart').getContext('2d');
+    if (categoryChartInstance) categoryChartInstance.destroy();
+
+    categoryChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: data.map(d => d.name),
+            datasets: [{
+                data: data.map(d => d.total),
+                backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#6366f1']
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
 }
 
-function startLiveUpdates() {
-    updateInterval = setInterval(() => {
-        document.getElementById('last-updated').textContent = new Date().toLocaleTimeString('th-TH');
-        // Optional: periodic fetch for admin
-        // fetchAllData(); 
-    }, 60000);
+function renderPaymentChart(data) {
+    const ctx = document.getElementById('paymentChart').getContext('2d');
+    if (paymentChartInstance) paymentChartInstance.destroy();
+
+    paymentChartInstance = new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: data.map(d => d.name),
+            datasets: [{
+                data: data.map(d => d.count),
+                backgroundColor: ['#3b82f6', '#14b8a6', '#f97316']
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
 }
 
-// Admin Functions
-function renderDashboard(stats) {
-    document.getElementById('total-sales').textContent = formatCurrency(stats.totalSales);
-    document.getElementById('admin-total-products').textContent = stats.totalProducts;
-    document.getElementById('admin-total-orders').textContent = stats.totalOrders;
-    document.getElementById('admin-out-of-stock').textContent = stats.outOfStockProducts;
+// Global instance for Status Chart
+let statusChartInstance = null;
+function renderStatusChart(data) {
+    const ctx = document.getElementById('statusChart').getContext('2d');
+    if (statusChartInstance) statusChartInstance.destroy();
 
-    // Sync Header Stats
-    const liveSalesEl = document.getElementById('live-sales-today');
-    if (liveSalesEl) liveSalesEl.textContent = formatCurrency(stats.totalSales);
+    statusChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: data.map(d => d.status.toUpperCase()),
+            datasets: [{
+                label: 'จำนวนออเดอร์',
+                data: data.map(d => d.count),
+                backgroundColor: [
+                    'rgba(255, 159, 64, 0.7)', // Pending (Orange)
+                    'rgba(75, 192, 192, 0.7)', // Completed (Green)
+                    'rgba(255, 99, 132, 0.7)', // Cancelled (Red)
+                    'rgba(54, 162, 235, 0.7)'  // Others (Blue)
+                ],
+                borderColor: [
+                    'rgb(255, 159, 64)',
+                    'rgb(75, 192, 192)',
+                    'rgb(255, 99, 132)',
+                    'rgb(54, 162, 235)'
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, ticks: { stepSize: 1 } }
+            }
+        }
+    });
+}
+
+function renderTopProductsList(products) {
+    const list = document.getElementById('top-products-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    products.forEach((p, index) => {
+        const item = document.createElement('li');
+        item.className = 'list-group-item d-flex justify-content-between align-items-center bg-transparent';
+        item.innerHTML = `
+            <div class="d-flex align-items-center">
+                <span class="badge bg-light text-dark me-3 rounded-pill" style="width: 25px;">${index + 1}</span>
+                <div>
+                    <div class="fw-bold text-sm">${p.name}</div>
+                    <small class="text-muted">${p.quantity} ชิ้น</small>
+                </div>
+            </div>
+            <span class="fw-bold text-success text-sm">${formatCurrency(p.total)}</span>
+        `;
+        list.appendChild(item);
+    });
+}
+
+function renderStaffPerformance(staff) {
+    const list = document.getElementById('staff-performance-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    staff.forEach((s, index) => {
+        const item = document.createElement('li');
+        item.className = 'list-group-item d-flex justify-content-between align-items-center bg-transparent';
+        item.innerHTML = `
+             <div class="d-flex align-items-center">
+                 <div class="bg-primary bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 32px; height: 32px;">
+                    <i class="bi bi-person text-primary"></i>
+                </div>
+                <div>
+                    <div class="fw-bold text-sm">${s.name}</div>
+                </div>
+            </div>
+            <span class="fw-bold text-primary text-sm">${formatCurrency(s.total)}</span>
+        `;
+        list.appendChild(item);
+    });
+}
+
+function formatDateShort(dateStr) {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+}
+
+async function loadDashboardData() {
+    const filterSelect = document.getElementById('date-filter');
+    const filter = filterSelect ? filterSelect.value : 'today';
+    const dates = getDateRange(filter);
+
+    // UX: Show loading state
+    const refreshBtn = document.getElementById('refresh-dashboard-btn');
+    const originalIcon = refreshBtn ? refreshBtn.innerHTML : '';
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>';
+    }
+
+    try {
+        // Fetch stats (and products/orders if needed, but usually just stats here)
+        await fetchDashboardStats(dates);
+        // Optionally fetch other data if needed for fresh view
+        // await fetchAllData(); 
+
+    } catch (error) {
+        console.error("Dashboard Load Error:", error);
+    } finally {
+        // UX: Reset loading state
+        if (refreshBtn) {
+            refreshBtn.disabled = false;
+            refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+        }
+    }
 }
 
 function renderAdminProductsTable() {
@@ -118,7 +348,7 @@ function renderAdminProductsTable() {
     if (products.length === 0) {
         container.innerHTML = `
             <tr>
-                <td colspan="8" class="text-center py-5">
+                <td colspan="9" class="text-center py-5">
                     <i class="bi bi-box fs-1 text-secondary mb-3 d-block"></i>
                     ไม่มีรายการสินค้า
                 </td>
@@ -131,9 +361,14 @@ function renderAdminProductsTable() {
         const row = document.createElement('tr');
         row.innerHTML = `
             <td>${product.id}</td>
-            <td>${product.name}</td>
+            <td>
+                <div class="text-truncate" style="max-width: 200px;" title="${product.name}">
+                    ${product.name}
+                </div>
+            </td>
             <td>${product.sku}</td>
             <td>${formatCurrency(product.price)}</td>
+            <td class="text-secondary">${formatCurrency(product.cost || 0)}</td>
             <td class="${parseInt(product.stock) <= 0 ? 'text-danger fw-bold' : parseInt(product.stock) <= 5 ? 'text-warning fw-bold' : ''}">
                 ${product.stock}
             </td>
@@ -322,10 +557,17 @@ function showAddProductModal() {
             </div>
             <input id="swal-name" class="swal2-input" placeholder="ชื่อสินค้า">
             <input id="swal-sku" class="swal2-input" placeholder="รหัส SKU">
-            <input id="swal-price" type="number" class="swal2-input" placeholder="ราคา" step="0.01" min="0">
-            <input id="swal-stock" type="number" class="swal2-input" placeholder="จำนวนคงเหลือ" min="0">
-            <input id="swal-unit" class="swal2-input" placeholder="หน่วยนับ (เช่น ชิ้น, กก.)">
-            <input id="swal-category" class="swal2-input" placeholder="หมวดหมู่">
+            <div class="d-flex gap-2">
+                <input id="swal-price" type="number" class="swal2-input" placeholder="ราคาขาย (หน้าร้าน)" step="0.01" min="0">
+                <input id="swal-cost" type="number" class="swal2-input" placeholder="ต้นทุน" step="0.01" min="0">
+            </div>
+            <div class="d-flex gap-2">
+                <input id="swal-price-dealer" type="number" class="swal2-input" placeholder="ราคาตัวแทนย่อย (70%)" step="0.01" min="0">
+                <input id="swal-price-vip" type="number" class="swal2-input" placeholder="ราคาตัวแทนใหญ่ (60%)" step="0.01" min="0">
+            </div>
+            <input id="swal-stock" type="number" class="swal2-input" placeholder="จำนวนเริ่มต้น" min="0">
+            <input id="swal-unit" class="swal2-input" placeholder="หน่วยนับ (เช่น ชิ้น, กล่อง)">
+            <input id="swal-category" class="swal2-input" placeholder="หมวดหมู่ (เช่น เครื่องดื่ม)">
             
             <div class="file-upload-container mt-3 text-start">
                 <label class="form-label small text-muted">รูปสินค้า (Upload หรือใส่ URL)</label>
@@ -337,10 +579,37 @@ function showAddProductModal() {
         showCancelButton: true,
         confirmButtonText: 'บันทึก',
         cancelButtonText: 'ยกเลิก',
+        didOpen: () => {
+            const priceInput = document.getElementById('swal-price');
+            const dealerInput = document.getElementById('swal-price-dealer');
+            const vipInput = document.getElementById('swal-price-vip');
+
+            // Auto-Calculate Prices
+            priceInput.addEventListener('input', () => {
+                const val = parseFloat(priceInput.value);
+                if (!isNaN(val)) {
+                    if (!dealerInput.value || dealerInput.dataset.auto === 'true') {
+                        dealerInput.value = Math.round(val * 0.70); // Round to int per user sheet
+                        dealerInput.dataset.auto = 'true';
+                    }
+                    if (!vipInput.value || vipInput.dataset.auto === 'true') {
+                        vipInput.value = Math.round(val * 0.60);
+                        vipInput.dataset.auto = 'true';
+                    }
+                }
+            });
+
+            // Mark manual edits
+            dealerInput.addEventListener('input', () => dealerInput.dataset.auto = 'false');
+            vipInput.addEventListener('input', () => vipInput.dataset.auto = 'false');
+        },
         preConfirm: () => {
             const name = document.getElementById('swal-name').value;
             const sku = document.getElementById('swal-sku').value;
             const price = document.getElementById('swal-price').value;
+            const cost = document.getElementById('swal-cost').value;
+            const priceDealer = document.getElementById('swal-price-dealer').value;
+            const priceVip = document.getElementById('swal-price-vip').value;
             const stock = document.getElementById('swal-stock').value;
             const unit = document.getElementById('swal-unit').value;
 
@@ -353,6 +622,9 @@ function showAddProductModal() {
                 name: name,
                 sku: sku,
                 price: parseFloat(price),
+                cost: parseFloat(cost) || 0,
+                price_dealer: parseFloat(priceDealer) || 0,
+                price_vip: parseFloat(priceVip) || 0,
                 stock: parseInt(stock),
                 unit: unit,
                 category: document.getElementById('swal-category').value || 'ทั่วไป',
@@ -386,7 +658,14 @@ function showEditProductModal(productId) {
             </div>
             <input id="swal-name" class="swal2-input" placeholder="ชื่อสินค้า" value="${product.name}">
             <input id="swal-sku" class="swal2-input" placeholder="รหัส SKU" value="${product.sku}">
-            <input id="swal-price" type="number" class="swal2-input" placeholder="ราคา" value="${product.price}" step="0.01" min="0">
+            <div class="d-flex gap-2">
+                <input id="swal-price" type="number" class="swal2-input" placeholder="ราคาขาย (หน้าร้าน)" value="${product.price}" step="0.01" min="0">
+                <input id="swal-cost" type="number" class="swal2-input" placeholder="ต้นทุน" value="${product.cost || 0}" step="0.01" min="0">
+            </div>
+            <div class="d-flex gap-2">
+                <input id="swal-price-dealer" type="number" class="swal2-input" placeholder="ราคาตัวแทนย่อย (70%)" value="${product.price_dealer || 0}" step="0.01" min="0">
+                <input id="swal-price-vip" type="number" class="swal2-input" placeholder="ราคาตัวแทนใหญ่ (60%)" value="${product.price_vip || 0}" step="0.01" min="0">
+            </div>
             <input id="swal-stock" type="number" class="swal2-input" placeholder="จำนวนคงเหลือ" value="${product.stock}" min="0">
             <input id="swal-unit" class="swal2-input" placeholder="หน่วยนับ" value="${product.unit}">
             <input id="swal-category" class="swal2-input" placeholder="หมวดหมู่" value="${product.category || ''}">
@@ -401,18 +680,55 @@ function showEditProductModal(productId) {
         showCancelButton: true,
         confirmButtonText: 'บันทึก',
         cancelButtonText: 'ยกเลิก',
+        didOpen: () => {
+            const priceInput = document.getElementById('swal-price');
+            const dealerInput = document.getElementById('swal-price-dealer');
+            const vipInput = document.getElementById('swal-price-vip');
+
+            // Auto-Calculate Prices on Edit too
+            priceInput.addEventListener('input', () => {
+                const val = parseFloat(priceInput.value);
+                if (!isNaN(val)) {
+                    // Only auto-update if they are 0 or explicitly requested?
+                    // Usually better to assume if user edits Main Price, they want tiers updated UNLESS they manually edited tiers before.
+                    // But here, let's stick to: Update if dataset.auto is true (default yes if matches calc).
+
+                    // Simple logic: Just update.
+                    if (!dealerInput.dataset.manual) dealerInput.value = Math.round(val * 0.70);
+                    if (!vipInput.dataset.manual) vipInput.value = Math.round(val * 0.60);
+                }
+            });
+
+            // If user touches dealer/vip, mark manual
+            dealerInput.addEventListener('input', () => dealerInput.dataset.manual = 'true');
+            vipInput.addEventListener('input', () => vipInput.dataset.manual = 'true');
+        },
         preConfirm: () => {
             const name = document.getElementById('swal-name').value;
-            // ... (Same validation as add)
+            const price = document.getElementById('swal-price').value;
+            const cost = document.getElementById('swal-cost').value;
+            const priceDealer = document.getElementById('swal-price-dealer').value;
+            const priceVip = document.getElementById('swal-price-vip').value;
+            const stock = document.getElementById('swal-stock').value;
+            const unit = document.getElementById('swal-unit').value;
+
+            if (!name || !price || !stock || !unit) {
+                Swal.showValidationMessage('กรุณากรอกข้อมูลให้ครบถ้วน');
+                return false;
+            }
+
             return {
                 id: productId,
                 name: name,
                 sku: document.getElementById('swal-sku').value,
-                price: parseFloat(document.getElementById('swal-price').value),
-                stock: parseInt(document.getElementById('swal-stock').value),
-                unit: document.getElementById('swal-unit').value,
-                category: document.getElementById('swal-category').value || 'ทั่วไป',
-                image: document.getElementById('swal-image').value || ''
+                price: parseFloat(price),
+                cost: parseFloat(cost) || 0,
+                price_dealer: parseFloat(priceDealer) || 0,
+                price_vip: parseFloat(priceVip) || 0,
+                stock: parseInt(stock),
+                unit: unit,
+                category: document.getElementById('swal-category').value,
+                image: document.getElementById('swal-image').value
             };
         }
     }).then((result) => {
@@ -440,7 +756,7 @@ function saveProduct(data) {
 }
 
 function updateProduct(data) {
-    apiRequest('/products', 'PUT', data).then(response => {
+    apiRequest('/products/' + data.id, 'PUT', data).then(response => {
         if (response && response.success) {
             Swal.fire({
                 icon: 'success',
@@ -496,7 +812,9 @@ function renderAdminOrdersTable() {
         return;
     }
 
-    orders.forEach(order => {
+    const displayOrders = orders.slice(0, 50); // Limit to 50 latest
+
+    displayOrders.forEach(order => {
         let items = [];
         try { items = JSON.parse(order.items); } catch (e) { items = []; }
 
@@ -525,6 +843,13 @@ function renderAdminOrdersTable() {
         `;
         container.appendChild(row);
     });
+
+    // Add "Load More" indicator if needed but for now simple limit
+    if (orders.length > 50) {
+        const infoRow = document.createElement('tr');
+        infoRow.innerHTML = `<td colspan="9" class="text-center text-muted py-2">แสดง 50 รายการล่าสุดจากทั้งหมด ${orders.length} รายการ</td>`;
+        container.appendChild(infoRow);
+    }
 }
 
 function searchOrders() {
@@ -611,7 +936,7 @@ function showAdjustStockModal() {
 
 function updateSettingsUI() {
     if (settings.store_name) document.getElementById('store-name').value = settings.store_name;
-    if (settings.tax_rate) document.getElementById('tax-rate').value = settings.tax_rate;
+    if (settings.discount_rate) document.getElementById('discount-rate').value = settings.discount_rate;
     if (settings.currency) document.getElementById('currency').value = settings.currency;
     if (settings.low_stock_threshold) document.getElementById('low-stock-threshold').value = settings.low_stock_threshold;
     if (settings.receipt_header) document.getElementById('receipt-header').value = settings.receipt_header;
@@ -621,7 +946,7 @@ function updateSettingsUI() {
 function saveSettings() {
     const settingsData = {
         store_name: document.getElementById('store-name').value,
-        tax_rate: document.getElementById('tax-rate').value,
+        discount_rate: document.getElementById('discount-rate').value,
         currency: document.getElementById('currency').value,
         low_stock_threshold: document.getElementById('low-stock-threshold').value,
         receipt_header: document.getElementById('receipt-header').value,
@@ -830,4 +1155,17 @@ function confirmDeleteUser(userId, username) {
             });
         }
     });
+}
+
+function startLiveUpdates() {
+    // interval 15 seconds
+    updateInterval = setInterval(() => {
+        // Update timestamp
+        const timeEl = document.getElementById('last-updated');
+        if (timeEl) timeEl.textContent = new Date().toLocaleTimeString('th-TH');
+
+        // Refresh Data
+        fetchOrders();
+        fetchDashboardStats();
+    }, 15000);
 }

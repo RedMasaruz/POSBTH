@@ -1,42 +1,92 @@
 /* === THEME 2026: DARK MODE DEFAULT === */
 :root {
-    /* Base Dark Mode */
-    --bg-primary: #0f172a;
-    --bg-secondary: #1e293b;
-    --bg-card: #334155;
-    --bg-surface: #475569;
-    --text-primary: #f8fafc;
-    --text-secondary: #cbd5e1;
-    --accent-primary: #22d3ee;
+    /* Base Dark Mode - High Contrast Text, Deep Backgrounds */
+    --bg-primary: #020617;
+    /* Darker than before */
+    --bg-secondary: #0f172a;
+    --bg-card: #1e293b;
+    --bg-surface: #334155;
+
+    /* Text - Increased Brightness */
+    --text-primary: #ffffff;
+    /* Pure White */
+    --text-secondary: #e2e8f0;
+    /* Lighter Grey */
+
+    /* Accents - Retain Vibrancy */
+    --accent-primary: #38bdf8;
+    /* Sky Blue - Softer */
     --accent-success: #4ade80;
-    --accent-warning: #fbbf24;
+    --accent-warning: #facc15;
     --accent-danger: #f87171;
-    --border-color: #475569;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.35);
-    --glass-bg: rgba(30, 41, 59, 0.7);
-    --glass-border: rgba(148, 163, 184, 0.1);
+
+    --border-color: #334155;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    /* Stronger shadows for dark mode */
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6);
+    --glass-bg: rgba(15, 23, 42, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.1);
 }
 
-/* Light Mode */
+/* Light Mode - Softer, less harsh */
 [data-theme="light"] {
-    --bg-primary: #f8fafc;
+    --bg-primary: #f1f5f9;
+    /* Slate 100 - Not pure white */
     --bg-secondary: #e2e8f0;
     --bg-card: #ffffff;
-    --bg-surface: #f1f5f9;
+    --bg-surface: #f8fafc;
+
+    /* Text - Strong Dark for readability */
     --text-primary: #0f172a;
     --text-secondary: #475569;
-    --accent-primary: #0ea5e9;
-    --accent-success: #10b981;
-    --accent-warning: #f59e0b;
-    --accent-danger: #ef4444;
+    /* Slate 600 */
+
+    /* Accents - Slightly darker for contrast on light */
+    --accent-primary: #0284c7;
+    /* Sky 600 */
+    --accent-success: #059669;
+    --accent-warning: #d97706;
+    --accent-danger: #dc2626;
+
     --border-color: #cbd5e1;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    --glass-bg: rgba(255, 255, 255, 0.7);
-    --glass-border: rgba(203, 213, 225, 0.2);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
+    /* Softer shadows */
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+    --glass-bg: rgba(255, 255, 255, 0.85);
+    --glass-border: rgba(0, 0, 0, 0.05);
+}
+
+/* Modern Green 2026 - Fresh, Eco, Clean */
+[data-theme="modern-green"] {
+    --bg-primary: #f0fdf4;
+    /* Green 50 */
+    --bg-secondary: #dcfce7;
+    /* Green 100 */
+    --bg-card: #ffffff;
+    --bg-surface: #ecfdf5;
+    /* Emerald 50 */
+
+    --text-primary: #064e3b;
+    /* Emerald 900 */
+    --text-secondary: #065f46;
+    /* Emerald 800 */
+
+    --accent-primary: #059669;
+    /* Emerald 600 */
+    --accent-success: #16a34a;
+    /* Green 600 */
+    --accent-warning: #d97706;
+    --accent-danger: #dc2626;
+
+    --border-color: #bbf7d0;
+    /* Green 200 */
+    --shadow-sm: 0 1px 2px rgba(22, 163, 74, 0.1);
+    --shadow-md: 0 4px 6px -1px rgba(22, 163, 74, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(22, 163, 74, 0.15);
+    --glass-bg: rgba(255, 255, 255, 0.9);
+    --glass-border: rgba(22, 163, 74, 0.2);
 }
 
 /* === BASE STYLES === */
@@ -94,6 +144,8 @@ h6 {
     margin-bottom: 1.5rem;
     overflow: hidden;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--text-primary) !important;
+    /* Force text color */
 }
 
 .card:hover {
@@ -111,7 +163,10 @@ h6 {
 
 .card-body {
     padding: 1.5rem;
+    color: var(--text-primary) !important;
+    /* Force text color */
 }
+
 
 /* === FORMS === */
 .form-control,
@@ -138,6 +193,26 @@ h6 {
     color: var(--text-secondary);
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
+}
+
+/* === OVERRIDES FOR BOOTSTRAP UTILITIES === */
+.text-secondary,
+.text-muted {
+    color: var(--text-secondary) !important;
+}
+
+.text-primary {
+    color: var(--accent-primary) !important;
+}
+
+.bg-light {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-primary) !important;
+}
+
+.bg-white {
+    background-color: var(--bg-card) !important;
+    color: var(--text-primary) !important;
 }
 
 /* === BUTTONS === */
@@ -678,4 +753,26 @@ footer {
         top: 0;
         width: 100%;
     }
+}
+
+/* === DROPDOWN THEME FIX === */
+.dropdown-menu {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-lg);
+}
+
+.dropdown-item {
+    color: var(--text-primary);
+    transition: all 0.2s ease;
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus {
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+.dropdown-divider {
+    border-top-color: var(--border-color);
 }

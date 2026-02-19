@@ -58,16 +58,39 @@
                                     class="bi bi-moon-stars me-2"></i>Dark Mode</a></li>
                         <li><a class="dropdown-item" href="#" data-theme="light"><i class="bi bi-sun me-2"></i>Light
                                 Mode</a></li>
+                        <li>
+                            <hr class="dropdown-divider">
+                        </li>
+                        <li><a class="dropdown-item text-success" href="#" data-theme="modern-green"><i
+                                    class="bi bi-palette me-2"></i>Modern Green 2026</a></li>
                     </ul>
                 </div>
 
                 <!-- Live Stats -->
-                <div class="d-none d-lg-flex align-items-center gap-3 me-3">
+                <div class="d-none d-lg-flex align-items-center gap-3 me-3" id="daily-sales-container">
                     <div class="text-center">
                         <div class="text-xs" style="color: var(--text-secondary);">ยอดขายวันนี้</div>
                         <div class="fw-bold text-numbers animate-pulse-slow"><span id="live-sales-today">฿0.00</span>
                         </div>
                     </div>
+                </div>
+
+                <!-- Pricing Tier Selector -->
+                <div class="dropdown me-2" id="pricing-tier-container" style="display:none;">
+                    <!-- Hidden by default, shown by JS -->
+                    <button class="btn btn-outline-success dropdown-toggle d-flex align-items-center" type="button"
+                        id="pricingDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-tag-fill me-2"></i>
+                        <span id="current-tier-display">ราคา: หน้าร้าน</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="pricingDropdown">
+                        <li><a class="dropdown-item active" href="#" onclick="setPricingTier('retail')"
+                                data-tier="retail">ลูกค้าทั่วไป (หน้าร้าน)</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setPricingTier('dealer')"
+                                data-tier="dealer">ตัวแทนย่อย (Dealer)</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setPricingTier('vip')" data-tier="vip">ตัวแทนใหญ่
+                                (VIP)</a></li>
+                    </ul>
                 </div>
 
                 <!-- Admin Login/Logout -->
@@ -76,6 +99,11 @@
                 <a href="/admin.html" class="btn btn-outline-primary" id="admin-link-btn" style="display: none;">
                     <i class="bi bi-shield-lock me-2"></i>
                     <span class="d-none d-md-inline">จัดการร้าน</span>
+                </a>
+
+                <!-- Guest Login Button -->
+                <a href="/login.html" class="btn btn-primary ms-2" id="login-btn" style="display: none;">
+                    <i class="bi bi-box-arrow-in-right me-1"></i> เข้าสู่ระบบ
                 </a>
 
                 <!-- User Profile & Logout -->
@@ -269,7 +297,7 @@
             </div>
 
             <!-- Recent Orders -->
-            <div class="row mt-4">
+            <div class="row mt-4" id="recent-orders-section">
                 <div class="col-12">
                     <div class="card">
                         <div class="card-header d-flex justify-content-between align-items-center">

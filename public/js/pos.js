@@ -3,6 +3,8 @@ let products = [];
 let orders = [];
 let cart = [];
 let currentSort = 'default'; // Sorting state
+let currentTier = 'retail'; // 'retail', 'dealer', 'vip'
+let isGuest = false;
 let updateInterval = null;
 
 // Initialize
@@ -13,11 +15,15 @@ document.addEventListener('DOMContentLoaded', () => {
         lastUpdatedEl.textContent = new Date().toLocaleTimeString('th-TH');
     }
 
-    // Check Session (RBAC)
-    if (typeof checkSession === 'function' && !checkSession()) return;
+    // Check Session (RBAC) - Allow Guest
+    if (typeof checkSession === 'function') {
+        checkSession(false);
+    }
 
     // Display User Info
     const user = getUser();
+    const pricingContainer = document.getElementById('pricing-tier-container');
+
     if (user) {
         // Name & Role
         const nameEl = document.getElementById('user-name-display');
@@ -25,11 +31,47 @@ document.addEventListener('DOMContentLoaded', () => {
         if (nameEl) nameEl.textContent = user.name;
         if (roleEl) roleEl.textContent = `สถานะ: ${user.role} (ID: ${user.id || '-'})`;
 
+        // Role-Based Pricing Logic
+        if (user.role === 'dealer') {
+            setPricingTier('dealer');
+        } else if (user.role === 'dealer_vip') {
+            setPricingTier('vip');
+        } else {
+            // Owner / Staff
+            setPricingTier('retail');
+        }
+
+        // Show/Filter Dropdown
+        if (pricingContainer) {
+            pricingContainer.style.display = 'block';
+            filterPricingOptions(user.role);
+        }
+
         // Show Admin Link for Owner
         if (user.role === 'owner') {
             const adminBtn = document.getElementById('admin-link-btn');
             if (adminBtn) adminBtn.style.display = 'inline-block';
         }
+    } else {
+        // Guest Mode
+        isGuest = true;
+        const loginBtn = document.getElementById('login-btn');
+        const profileMenu = document.getElementById('user-profile-menu');
+
+        // Hide sensitive info for Guest
+        const salesContainer = document.getElementById('daily-sales-container');
+        const recentOrders = document.getElementById('recent-orders-section');
+
+        if (salesContainer) {
+            salesContainer.style.setProperty('display', 'none', 'important');
+            salesContainer.classList.remove('d-lg-flex');
+        }
+        if (recentOrders) recentOrders.style.display = 'none';
+
+        if (loginBtn) loginBtn.style.display = 'inline-block';
+        if (profileMenu) profileMenu.style.display = 'none';
+
+        setPricingTier('retail');
     }
 
     // Apply saved theme
@@ -174,6 +216,85 @@ function startLiveUpdates() {
 
 // Product Functions
 
+
+
+function filterPricingOptions(role) {
+    const retailOption = document.querySelector('a[data-tier="retail"]');
+    const dealerOption = document.querySelector('a[data-tier="dealer"]');
+    const vipOption = document.querySelector('a[data-tier="vip"]');
+
+    if (role === 'dealer') {
+        // Dealer sees: Retail & Dealer. Hides VIP.
+        if (retailOption) retailOption.parentElement.style.display = 'block';
+        if (dealerOption) dealerOption.parentElement.style.display = 'block';
+        if (vipOption) vipOption.parentElement.style.display = 'none';
+    } else if (role === 'dealer_vip') {
+        // VIP sees: Retail & VIP. Hides Dealer.
+        if (retailOption) retailOption.parentElement.style.display = 'block';
+        if (dealerOption) dealerOption.parentElement.style.display = 'none';
+        if (vipOption) vipOption.parentElement.style.display = 'block';
+    } else if (role === 'owner' || role === 'admin' || role === 'staff') {
+        // Owner sees ALL
+        if (retailOption) retailOption.parentElement.style.display = 'block';
+        if (dealerOption) dealerOption.parentElement.style.display = 'block';
+        if (vipOption) vipOption.parentElement.style.display = 'block';
+    } else {
+        // Others (Guest?): Retail only? Or allow all?
+        // Let's safe default to All if we don't know, or restrict?
+        // Let's show All and let setPricingTier fall back if authorized? 
+        // Actually safe default is to show logic for Owner.
+        if (retailOption) retailOption.parentElement.style.display = 'block';
+        if (dealerOption) dealerOption.parentElement.style.display = 'block';
+        if (vipOption) vipOption.parentElement.style.display = 'block';
+    }
+}
+
+function getPrice(product) {
+    if (!product) return 0;
+
+    let price = parseFloat(product.price); // Default Retail
+
+    if (currentTier === 'dealer') {
+        const dealerPrice = parseFloat(product.price_dealer);
+        if (!isNaN(dealerPrice) && dealerPrice > 0) {
+            price = dealerPrice;
+        }
+    } else if (currentTier === 'vip') {
+        const vipPrice = parseFloat(product.price_vip);
+        if (!isNaN(vipPrice) && vipPrice > 0) {
+            price = vipPrice;
+        }
+    }
+
+    return price;
+}
+
+function setPricingTier(tier) {
+    // Validate
+    if (!['retail', 'dealer', 'vip'].includes(tier)) return;
+    currentTier = tier;
+
+    // Update UI
+    const displayEl = document.getElementById('current-tier-display');
+    if (displayEl) {
+        let label = 'ราคา: หน้าร้าน';
+        if (tier === 'dealer') label = 'ราคา: ตัวแทนย่อย';
+        if (tier === 'vip') label = 'ราคา: ตัวแทนใหญ่';
+        displayEl.textContent = label;
+
+        // Update button style?
+        const btn = document.getElementById('pricingDropdown');
+        if (btn) {
+            btn.className = `btn dropdown-toggle d-flex align-items-center ${tier === 'retail' ? 'btn-outline-success' : 'btn-success'}`;
+        }
+    }
+
+    // Refresh Views
+    renderProductGrid();
+    updateCart(); // Recalculate totals
+}
+
+
 function showProductQuickView(productId) {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -208,7 +329,7 @@ function showProductQuickView(productId) {
             </div>
             <div class="text-start">
                 <p><strong>รหัส:</strong> ${product.sku || product.id}</p>
-                <p><strong>ราคา:</strong> ${formatCurrency(product.price)}</p>
+                <p><strong>ราคา:</strong> ${formatCurrency(getPrice(product))}</p>
                 <p><strong>คงเหลือ:</strong> <span class="text-${stockColor}">${product.stock} ${product.unit}</span> (${stockStatus})</p>
                 <p><strong>หมวดหมู่:</strong> ${product.category || 'ทั่วไป'}</p>
             </div>
@@ -244,10 +365,13 @@ function renderProductGrid() {
 
     // Apply Sorting
     filteredProducts.sort((a, b) => {
+        const priceA = getPrice(a);
+        const priceB = getPrice(b);
+
         if (currentSort === 'price-asc') {
-            return parseFloat(a.price) - parseFloat(b.price);
+            return priceA - priceB;
         } else if (currentSort === 'price-desc') {
-            return parseFloat(b.price) - parseFloat(a.price);
+            return priceB - priceA;
         } else {
             // Default: Sort by Name or ID
             return a.name.localeCompare(b.name, 'th');
@@ -273,12 +397,11 @@ function renderProductGrid() {
 
         let imageUrl = product.image;
         if (!imageUrl || imageUrl.trim() === '') {
-            const bgColor = 'e2e8f0';
-            const textColor = '64748b';
-            const text = encodeURIComponent(product.name.substring(0, 2).toUpperCase());
+            // Use a clean Box Icon SVG
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none">
-                <rect width="120" height="120" fill="#${bgColor}"/>
-                <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="40" fill="#${textColor}" text-anchor="middle" dy=".3em">${text}</text>
+                <rect width="120" height="120" fill="#f8fafc"/>
+                <path d="M60 40 L60 80 M40 60 L80 60" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" display="none"/> <!-- Optional Plus -->
+                <path d="M40 45 L60 35 L80 45 L80 75 L60 85 L40 75 Z M40 45 L60 55 L80 45 M60 55 L60 85" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>`;
             imageUrl = `data:image/svg+xml;base64,${btoa(svg)}`;
         }
@@ -297,7 +420,7 @@ function renderProductGrid() {
         card.innerHTML = `
             <div class="product-category">${product.category || 'ทั่วไป'}</div>
             ${imageHtml}
-            <div class="product-price">${formatCurrency(product.price)}</div>
+            <div class="product-price">${formatCurrency(getPrice(product))}</div>
             <div class="product-name">${product.name}</div>
             <div class="product-code">${product.sku || product.id}</div>
             <div class="product-stock ${stockClass}">
@@ -521,8 +644,8 @@ function updateCart() {
         return;
     }
 
-    const subtotal = cart.reduce((sum, item) => sum + (parseFloat(item.product.price) * item.quantity), 0);
-    const discountRate = parseFloat(settings.tax_rate || 0);
+    const subtotal = cart.reduce((sum, item) => sum + (getPrice(item.product) * item.quantity), 0);
+    const discountRate = parseFloat(settings.discount_rate || 0);
     const discount = subtotal * (discountRate / 100);
     const total = subtotal - discount;
 
@@ -535,6 +658,19 @@ function updateCart() {
     totalElement.textContent = formatCurrency(total);
     checkoutBtn.disabled = false;
 
+    // Guest Checkout Logic
+    if (isGuest) {
+        checkoutBtn.innerHTML = '<i class="bi bi-truck me-2"></i>สั่งซื้อทันที (Guest Checkout)';
+        checkoutBtn.classList.remove('btn-success');
+        checkoutBtn.classList.add('btn-primary');
+        checkoutBtn.onclick = showGuestCheckoutModal;
+    } else {
+        checkoutBtn.innerHTML = '<i class="bi bi-check-circle me-2"></i>ชำระเงิน';
+        checkoutBtn.classList.add('btn-success');
+        checkoutBtn.classList.remove('btn-primary');
+        checkoutBtn.onclick = () => checkout(); // Pass nothing
+    }
+
     container.innerHTML = '';
     cart.forEach((item, index) => {
         const itemElement = document.createElement('div');
@@ -542,7 +678,7 @@ function updateCart() {
         itemElement.innerHTML = `
             <div class="cart-item-info">
                 <div class="cart-item-name">${item.product.name}</div>
-                <div class="cart-item-price">${formatCurrency(item.product.price)}/${item.product.unit}</div>
+                <div class="cart-item-price">${formatCurrency(getPrice(item.product))}/${item.product.unit}</div>
             </div>
             <div class="cart-item-qty">
                 <button class="qty-btn" onclick="adjustCartQty(${index}, -1)">-</button>
@@ -611,7 +747,7 @@ function clearCart() {
     });
 }
 
-async function checkout() {
+async function checkout(guestData = null) {
     if (cart.length === 0) {
         Swal.fire({
             icon: 'error',
@@ -626,21 +762,25 @@ async function checkout() {
         items: cart.map(item => ({
             productId: item.product.id,
             name: item.product.name,
-            price: parseFloat(item.product.price),
+            price: getPrice(item.product), // USE CORRECT PRICE
             quantity: item.quantity
         })),
         payment_method: document.getElementById('payment-method').value,
         notes: document.getElementById('order-notes').value || '',
         status: 'completed',
-        subtotal: cart.reduce((sum, item) => sum + (parseFloat(item.product.price) * item.quantity), 0),
+        subtotal: cart.reduce((sum, item) => sum + (getPrice(item.product) * item.quantity), 0),
         tax: 0,
         total: 0,
         userId: getUser()?.id,
-        userName: getUser()?.name
+        userName: getUser()?.name,
+        // Guest Fields
+        customer_name: guestData ? guestData.name : null,
+        customer_address: guestData ? guestData.address : null,
+        customer_phone: guestData ? guestData.phone : null
     };
 
-    const discountRate = parseFloat(settings.tax_rate || 0);
-    orderData.tax = orderData.subtotal * (discountRate / 100); // Storing discount in 'tax' field
+    const discountRate = parseFloat(settings.discount_rate || 0); // Corrected property name from tax_rate
+    orderData.tax = orderData.subtotal * (discountRate / 100);
     orderData.total = orderData.subtotal - orderData.tax;
 
     Swal.fire({
@@ -657,6 +797,7 @@ async function checkout() {
                 <p><strong>เลขที่คำสั่งซื้อ:</strong> ${response.orderId}</p>
                 <p><strong>ยอดรวมสุทธิ:</strong> ${formatCurrency(response.total || orderData.total)}</p>
                 <p><strong>วันที่:</strong> ${new Date().toLocaleString('th-TH')}</p>
+                ${guestData ? `<p><strong>ลูกค้า:</strong> ${guestData.name} (${guestData.phone})</p>` : ''}
                 <hr>
                 <p><strong>รายการสินค้า:</strong></p>
                 <ul>
@@ -667,7 +808,7 @@ async function checkout() {
 
         Swal.fire({
             icon: 'success',
-            title: 'ชำระเงินสำเร็จ!',
+            title: 'สั่งซื้อสำเร็จ!',
             html: receiptHtml,
             showCancelButton: true,
             confirmButtonText: 'พิมพ์ใบเสร็จ',
@@ -690,6 +831,41 @@ async function checkout() {
             title: 'ผิดพลาด',
             text: response ? response.message : 'Unknown Error'
         });
+    }
+}
+
+async function showGuestCheckoutModal() {
+    const { value: formValues } = await Swal.fire({
+        title: 'ข้อมูลจัดส่ง (Guest Mode)',
+        html: `
+            <div class="text-start">
+                <label class="form-label">ชื่อ-นามสกุล <span class="text-danger">*</span></label>
+                <input id="guest-name" class="form-control mb-2" placeholder="กรอกชื่อ-นามสกุล">
+                
+                <label class="form-label">เบอร์โทรศัพท์ <span class="text-danger">*</span></label>
+                <input id="guest-phone" class="form-control mb-2" placeholder="กรอกเบอร์โทรศัพท์">
+                
+                <label class="form-label">ที่อยู่จัดส่ง <span class="text-danger">*</span></label>
+                <textarea id="guest-address" class="form-control" rows="3" placeholder="บ้านเลขที่, ถนน, แขวง/ตำบล, เขต/อำเภอ, จังหวัด, รหัสไปรษณีย์"></textarea>
+            </div>
+        `,
+        focusConfirm: false,
+        showCancelButton: true,
+        confirmButtonText: 'ยืนยันการสั่งซื้อ',
+        cancelButtonText: 'ยกเลิก',
+        preConfirm: () => {
+            const name = document.getElementById('guest-name').value;
+            const phone = document.getElementById('guest-phone').value;
+            const address = document.getElementById('guest-address').value;
+            if (!name || !phone || !address) {
+                Swal.showValidationMessage('กรุณากรอกข้อมูลให้ครบถ้วน');
+            }
+            return { name, phone, address };
+        }
+    });
+
+    if (formValues) {
+        checkout(formValues);
     }
 }
 

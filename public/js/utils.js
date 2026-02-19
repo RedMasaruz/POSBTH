@@ -20,6 +20,19 @@ if ('serviceWorker' in navigator) {
     });
 }
 
+// Global Event Listeners (Theme)
+document.addEventListener('DOMContentLoaded', () => {
+    // Theme Switcher Logic
+    const themeParams = document.querySelectorAll('[data-theme]');
+    themeParams.forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault();
+            const theme = el.getAttribute('data-theme');
+            applyTheme(theme);
+        });
+    });
+});
+
 // Global API Request Helper
 async function apiRequest(endpoint, method = 'GET', body = null) {
     try {
