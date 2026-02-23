@@ -77,6 +77,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (recentOrders) recentOrders.style.display = 'none';
 
+        const statsBar = document.getElementById('stats-bar');
+        if (statsBar) statsBar.style.display = 'none';
+
         if (loginBtn) loginBtn.style.display = 'inline-block';
         if (profileMenu) profileMenu.style.display = 'none';
 
@@ -203,6 +206,11 @@ function handleSlipUpload(input) {
 }
 
 function fetchAllData() {
+    const statsBar = document.getElementById('stats-bar');
+    if (statsBar) {
+        statsBar.style.setProperty('display', getUser() ? 'block' : 'none', 'important');
+    }
+
     fetchProducts();
     fetchOrders();
     fetchSettings();

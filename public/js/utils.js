@@ -7,16 +7,47 @@ function applyTheme(theme) {
     localStorage.setItem('selectedTheme', theme);
 }
 
-// Register Service Worker
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-            .then(registration => {
-                console.log('ServiceWorker registration successful with scope: ', registration.scope);
-            })
-            .catch(err => {
-                console.log('ServiceWorker registration failed: ', err);
+// Force Reset App Logic
+function forceResetApp() {
+    Swal.fire({
+        title: 'ยืนยันการรีเซ็ตแอป?',
+        text: 'การรีเซ็ตจะลบข้อมูลแคชและรีสตาร์ทแอปพลิเคชันใหม่ทั้งหมดเพื่อรับเวอร์ชันล่าสุด',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        confirmButtonText: 'ใช่, รีเซ็ตทันที',
+        cancelButtonText: 'ยกเลิก'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            Swal.fire({
+                title: 'กำลังรีเซ็ต...',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading()
             });
+
+            // 1. Clear Caches
+            if ('caches' in window) {
+                caches.keys().then(names => {
+                    for (let name of names) caches.delete(name);
+                });
+            }
+
+            // 2. Unregister Service Workers
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(registrations => {
+                    for (let registration of registrations) registration.unregister();
+                });
+            }
+
+            // 3. Clear Storage
+            localStorage.clear();
+            sessionStorage.clear();
+
+            // 4. Reload
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        }
     });
 }
 

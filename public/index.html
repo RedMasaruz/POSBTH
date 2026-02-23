@@ -149,7 +149,8 @@
         <!-- POS System -->
         <div id="pos-system" style="display: none;">
             <!-- Quick Stats Bar -->
-            <div class="row mb-4 animate-fade-in">
+            <div class="row mb-4 animate-fade-in" id="stats-bar">
+
                 <div class="col-12">
                     <div class="card glass">
                         <div class="card-body py-3">
@@ -384,7 +385,7 @@
             <div class="row align-items-center">
                 <div class="col-md-6 text-md-start">
                     <div class="fw-medium">ระบบ POS | Point of Sale System</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">v2026 • Modern • Fast • Reliable
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">v1.0.6 • Modern • Fast • Reliable
                     </div>
                 </div>
                 <div class="col-md-6 text-md-end" style="color: var(--text-secondary);">
@@ -400,6 +401,53 @@
 
     <script src="js/utils.js"></script>
     <script src="js/pos.js"></script>
+
+    <script>
+        // PWA Update Notification Logic
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(reg => {
+                    reg.addEventListener('updatefound', () => {
+                        const newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                showUpdateNotification(reg);
+                            }
+                        });
+                    });
+                });
+            });
+
+            let refreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!refreshing) {
+                    window.location.reload();
+                    refreshing = true;
+                }
+            });
+        }
+
+        function showUpdateNotification(reg) {
+            Swal.fire({
+                title: 'มีอัปเดตใหม่!',
+                text: 'ระบบมีการอัปเดตเวอร์ชันใหม่ กรุณารีเฟรชเพื่อใช้งาน',
+                icon: 'info',
+                showCancelButton: true,
+                confirmButtonText: 'อัปเดตทันที',
+                cancelButtonText: 'ไว้ทีหลัง',
+                toast: true,
+                position: 'top-end',
+                timer: 15000,
+                timerProgressBar: true
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    if (reg.waiting) {
+                        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    }
+                }
+            });
+        }
+    </script>
 </body>
 
 </html>

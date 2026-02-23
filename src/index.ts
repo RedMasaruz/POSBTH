@@ -732,10 +732,23 @@ app.get('*', async (c) => {
       waitUntil: (promise: Promise<any>) => executionCtx.waitUntil(promise)
     };
 
-    return await getAssetFromKV(fetchEvent as any, {
+    const response = await getAssetFromKV(fetchEvent as any, {
       ASSET_NAMESPACE: c.env.__STATIC_CONTENT,
       ASSET_MANIFEST: assetManifest
     });
+
+    // Disable caching for HTML files to ensure PWA updates
+    if (c.req.path.endsWith('.html') || c.req.path === '/' || c.req.path.endsWith('sw.js')) {
+      const newHeaders = new Headers(response.headers);
+      newHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders
+      });
+    }
+
+    return response;
   } catch (e) {
     return c.text('Not Found', 404);
   }
