@@ -31,6 +31,8 @@ type OrderBody = {
   customer_name?: string;
   customer_address?: string;
   customer_phone?: string;
+  slip_image?: string;
+  payment_details?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -515,12 +517,12 @@ app.post('/api/orders', async (c) => {
     // 2. Execute Transaction (Batch)
     const statements = [
       c.env.DB.prepare(
-        `INSERT INTO orders (id, subtotal, tax, total, payment_method, status, notes, items, created_by, created_by_name, created_at, customer_name, customer_address, customer_phone) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO orders (id, subtotal, tax, total, payment_method, status, notes, items, slip_image, payment_details, created_by, created_by_name, created_at, customer_name, customer_address, customer_phone) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         orderId, serverSubtotal, discount, serverTotal,
         body.payment_method || 'cash', body.status || 'completed', body.notes || '',
-        JSON.stringify(validatedItems),
+        JSON.stringify(validatedItems), body.slip_image || null, body.payment_details || null,
         body.userId ? String(body.userId) : null,
         body.userName || 'Guest', // created_by_name
         new Date().toISOString(),
@@ -557,6 +559,24 @@ app.post('/api/orders', async (c) => {
     await c.env.DB.batch(statements);
 
     return c.json({ success: true, orderId, message: 'Order processed', total: serverTotal }, 201);
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
+// Update Order Status (Admin Verification)
+app.patch('/api/orders/:id/status', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const { status } = await c.req.json();
+
+    if (!id || !status) return errorResponse(c, 'Missing Order ID or Status');
+
+    await c.env.DB.prepare('UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(status, id)
+      .run();
+
+    return c.json({ success: true, message: `Order status updated to ${status}` });
   } catch (e: any) {
     return errorResponse(c, e.message, 500);
   }

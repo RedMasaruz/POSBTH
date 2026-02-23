@@ -62,6 +62,7 @@ function fetchOrders() {
         if (data) {
             orders = data;
             renderAdminOrdersTable();
+            renderVerifyOrdersTable(); // Added this
             updateLiveStats();
         }
     });
@@ -977,6 +978,99 @@ function renderAdminOrdersTable() {
         infoRow.innerHTML = `<td colspan="9" class="text-center text-muted py-2">แสดง 50 รายการล่าสุดจากทั้งหมด ${orders.length} รายการ</td>`;
         container.appendChild(infoRow);
     }
+}
+
+function renderVerifyOrdersTable() {
+    const container = document.getElementById('verify-orders-table');
+    const badge = document.getElementById('pending-verify-count');
+    if (!container) return;
+
+    const pendingOrders = orders.filter(o => o.status === 'pending_verification');
+
+    // Update Badge
+    if (badge) {
+        if (pendingOrders.length > 0) {
+            badge.textContent = pendingOrders.length;
+            badge.style.display = 'inline-block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    container.innerHTML = '';
+
+    if (pendingOrders.length === 0) {
+        container.innerHTML = '<tr><td colspan="6" class="text-center py-5">ไม่มียอดโอนที่รอตรวจสอบ</td></tr>';
+        return;
+    }
+
+    pendingOrders.forEach(order => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><span class="fw-bold">${order.id}</span></td>
+            <td>${new Date(order.created_at).toLocaleString('th-TH')}</td>
+            <td>
+                <div>${order.customer_name || 'Guest'}</div>
+                <div class="small text-muted">${order.customer_phone || '-'}</div>
+            </td>
+            <td><span class="fw-bold text-primary">${formatCurrency(order.total)}</span></td>
+            <td>
+                ${order.slip_image ? `
+                    <button class="btn btn-sm btn-outline-info" onclick="viewSlip('${order.id}')">
+                        <i class="bi bi-image"></i> ดูสลิป
+                    </button>
+                ` : '<span class="text-muted small">ไม่มีสลิป</span>'}
+            </td>
+            <td>
+                <div class="d-flex gap-2 justify-content-center">
+                    <button class="btn btn-sm btn-success px-3" onclick="updateOrderStatus('${order.id}', 'completed')">
+                        <i class="bi bi-check-lg"></i> อนุมัติ
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteOrder('${order.id}')">
+                        <i class="bi bi-x-lg"></i> ปฏิเสธ
+                    </button>
+                </div>
+            </td>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function viewSlip(orderId) {
+    const order = orders.find(o => o.id === orderId);
+    if (!order || !order.slip_image) return;
+
+    Swal.fire({
+        title: 'หลักฐานการโอนเงิน',
+        text: `ออร์เดอร์: ${orderId}`,
+        imageUrl: order.slip_image,
+        imageAlt: 'Payment Slip',
+        confirmButtonText: 'ปิด'
+    });
+}
+
+function updateOrderStatus(orderId, status) {
+    const statusText = status === 'completed' ? 'อนุมัติการชำระเงิน' : 'เปลี่ยนสถานะ';
+
+    Swal.fire({
+        title: statusText + '?',
+        text: `ยืนยันการเปลี่ยนสถานะออร์เดอร์ ${orderId} เป็น ${status}?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'ยืนยัน',
+        cancelButtonText: 'ยกเลิก'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            apiRequest('/orders/' + orderId + '/status', 'PATCH', { status }).then(response => {
+                if (response && response.success) {
+                    Swal.fire({ icon: 'success', title: 'สำเร็จ!', showConfirmButton: false, timer: 1500 });
+                    fetchOrders();
+                } else {
+                    Swal.fire({ icon: 'error', title: 'ผิดพลาด!', text: response ? response.message : 'Error' });
+                }
+            });
+        }
+    });
 }
 
 function searchOrders() {

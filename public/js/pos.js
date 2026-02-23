@@ -6,6 +6,15 @@ let currentSort = 'default'; // Sorting state
 let currentTier = 'retail'; // 'retail', 'dealer', 'vip'
 let isGuest = false;
 let updateInterval = null;
+let currentSlip = null;
+
+// Bank Details (Customizable)
+const BANK_DETAILS = {
+    promptPay: '0812345678', // Example PromptPay ID
+    accounts: [
+        { bank: 'กสิกรไทย (K-Bank)', no: '123-4-56789-0', name: 'บจก. พีโอเอส กระท่อม' }
+    ]
+};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -103,6 +112,9 @@ function checkSystemStatus() {
             products = data || [];
             fetchAllData();
         }
+
+        // Initialize Payment UI
+        handlePaymentMethodChange();
     }).catch(err => {
         console.error('System Check Error:', err);
         const initPrompt = document.getElementById('init-prompt');
@@ -118,6 +130,76 @@ function checkSystemStatus() {
             footer: '<a href="#" onclick="location.reload()">ลองรีเฟรชหน้าจอ</a>'
         });
     });
+}
+
+// --- Payment Helpers ---
+
+function handlePaymentMethodChange() {
+    const methodSelect = document.getElementById('payment-method');
+    if (!methodSelect) return;
+
+    const method = methodSelect.value;
+    const cashDetails = document.getElementById('cash-details');
+    const bankDetails = document.getElementById('bank-details');
+    const qrContainer = document.getElementById('promptpay-qr-container');
+    const bankAccContainer = document.getElementById('bank-acc-container');
+
+    // Reset Display
+    if (cashDetails) cashDetails.style.display = 'none';
+    if (bankDetails) bankDetails.style.display = 'none';
+    if (qrContainer) qrContainer.style.display = 'none';
+    if (bankAccContainer) bankAccContainer.style.display = 'none';
+
+    if (method === 'cash') {
+        if (cashDetails) cashDetails.style.display = 'block';
+        calculateChange();
+    } else {
+        if (bankDetails) bankDetails.style.display = 'block';
+        if (method === 'promptpay') {
+            if (qrContainer) qrContainer.style.display = 'block';
+            const qrImg = document.getElementById('promptpay-qr');
+            if (qrImg) qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://promptpay.io/${BANK_DETAILS.promptPay}`;
+        } else if (method === 'transfer') {
+            if (bankAccContainer) bankAccContainer.style.display = 'block';
+        }
+    }
+}
+
+function calculateChange() {
+    const totalEl = document.getElementById('cart-total');
+    if (!totalEl) return;
+
+    const total = parseFloat(totalEl.textContent.replace(/[^0-9.]/g, '')) || 0;
+    const receivedEl = document.getElementById('cash-received');
+    const received = receivedEl ? parseFloat(receivedEl.value) || 0 : 0;
+    const changeEl = document.getElementById('cash-change');
+
+    if (!changeEl) return;
+
+    if (received >= total) {
+        changeEl.textContent = formatCurrency(received - total);
+        changeEl.classList.remove('text-danger');
+        changeEl.classList.add('text-success');
+    } else {
+        changeEl.textContent = 'ยอดไม่พอ';
+        changeEl.classList.add('text-danger');
+        changeEl.classList.remove('text-success');
+    }
+}
+
+function handleSlipUpload(input) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            currentSlip = e.target.result;
+            const preview = document.getElementById('slip-preview');
+            if (preview) {
+                preview.src = currentSlip;
+                preview.style.display = 'block';
+            }
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
 }
 
 function fetchAllData() {
@@ -641,6 +723,12 @@ function updateCart() {
         taxElement.textContent = '฿0.00';
         totalElement.textContent = '฿0.00';
         checkoutBtn.disabled = true;
+
+        // Clear payment details
+        currentSlip = null;
+        if (document.getElementById('payment-slip')) document.getElementById('payment-slip').value = '';
+        if (document.getElementById('slip-preview')) document.getElementById('slip-preview').style.display = 'none';
+        if (document.getElementById('cash-received')) document.getElementById('cash-received').value = '';
         return;
     }
 
@@ -691,6 +779,12 @@ function updateCart() {
         `;
         container.appendChild(itemElement);
     });
+
+    // Refresh Change calculation if in Cash mode
+    const methodSelect = document.getElementById('payment-method');
+    if (methodSelect && methodSelect.value === 'cash') {
+        calculateChange();
+    }
 }
 
 function adjustCartQty(index, change) {
@@ -749,39 +843,57 @@ function clearCart() {
 
 async function checkout(guestData = null) {
     if (cart.length === 0) {
-        Swal.fire({
-            icon: 'error',
-            title: 'ตะกร้าว่าง',
-            text: 'กรุณาเพิ่มสินค้าก่อนชำระเงิน'
-        });
+        Swal.fire({ icon: 'error', title: 'ตะกร้าว่าง', text: 'กรุณาเพิ่มสินค้าก่อนชำระเงิน' });
         return;
     }
 
+    const method = document.getElementById('payment-method').value;
+    const total = cart.reduce((sum, item) => sum + (getPrice(item.product) * item.quantity), 0);
+    const discountRate = parseFloat(settings.discount_rate || 0);
+    const grandTotal = total - (total * (discountRate / 100));
+
+    // Payment Validation
+    let paymentDetails = {};
+    let status = 'completed';
+
+    if (method === 'cash') {
+        const received = parseFloat(document.getElementById('cash-received').value) || 0;
+        if (received < grandTotal) {
+            Swal.fire({ icon: 'warning', title: 'รับเงินไม่ครบ', text: 'กรุณากรอกจำนวนเงินที่รับมาให้ถูกต้อง' });
+            return;
+        }
+        paymentDetails = { received, change: received - grandTotal };
+    } else if (method === 'promptpay' || method === 'transfer') {
+        if (!currentSlip && isGuest) {
+            Swal.fire({ icon: 'warning', title: 'ยังไม่ได้แนบสลิป', text: 'กรุณาอัปโหลดหลักฐานการโอนเงินเพื่อดำเนินการต่อ' });
+            return;
+        }
+        // If staff (retail mode), they might verify manually
+        status = isGuest ? 'pending_verification' : 'completed';
+    }
+
     const orderData = {
-        channel: 'หน้าร้าน',
+        channel: isGuest ? 'ออนไลน์' : 'หน้าร้าน',
         items: cart.map(item => ({
             productId: item.product.id,
             name: item.product.name,
-            price: getPrice(item.product), // USE CORRECT PRICE
+            price: getPrice(item.product),
             quantity: item.quantity
         })),
-        payment_method: document.getElementById('payment-method').value,
+        payment_method: method,
+        payment_details: JSON.stringify(paymentDetails),
+        slip_image: currentSlip,
         notes: document.getElementById('order-notes').value || '',
-        status: 'completed',
-        subtotal: cart.reduce((sum, item) => sum + (getPrice(item.product) * item.quantity), 0),
-        tax: 0,
-        total: 0,
+        status: status,
+        subtotal: total,
+        tax: total - grandTotal,
+        total: grandTotal,
         userId: getUser()?.id,
         userName: getUser()?.name,
-        // Guest Fields
         customer_name: guestData ? guestData.name : null,
         customer_address: guestData ? guestData.address : null,
         customer_phone: guestData ? guestData.phone : null
     };
-
-    const discountRate = parseFloat(settings.discount_rate || 0); // Corrected property name from tax_rate
-    orderData.tax = orderData.subtotal * (discountRate / 100);
-    orderData.total = orderData.subtotal - orderData.tax;
 
     Swal.fire({
         title: 'กำลังบันทึกคำสั่งซื้อ...',
@@ -795,21 +907,16 @@ async function checkout(guestData = null) {
         const receiptHtml = `
             <div class="text-start">
                 <p><strong>เลขที่คำสั่งซื้อ:</strong> ${response.orderId}</p>
-                <p><strong>ยอดรวมสุทธิ:</strong> ${formatCurrency(response.total || orderData.total)}</p>
-                <p><strong>วันที่:</strong> ${new Date().toLocaleString('th-TH')}</p>
-                ${guestData ? `<p><strong>ลูกค้า:</strong> ${guestData.name} (${guestData.phone})</p>` : ''}
-                <hr>
-                <p><strong>รายการสินค้า:</strong></p>
-                <ul>
-                    ${cart.map(item => `<li>${item.product.name} × ${item.quantity}</li>`).join('')}
-                </ul>
+                <p><strong>สถานะ:</strong> ${status === 'completed' ? '<span class="text-success">สำเร็จ</span>' : '<span class="text-warning">รอตรวจสอบ</span>'}</p>
+                <p><strong>ยอดรวมสุทธิ:</strong> ${formatCurrency(grandTotal)}</p>
+                ${method === 'cash' ? `<p><strong>รับเงิน:</strong> ${formatCurrency(paymentDetails.received)}</p><p><strong>เงินทอน:</strong> ${formatCurrency(paymentDetails.change)}</p>` : ''}
             </div>
         `;
 
         Swal.fire({
             icon: 'success',
-            title: 'สั่งซื้อสำเร็จ!',
-            html: receiptHtml,
+            title: status === 'completed' ? 'สั่งซื้อสำเร็จ!' : 'รับออร์เดอร์แล้ว!',
+            html: receiptHtml + (status === 'pending_verification' ? '<p class="mt-2 small text-muted">เจ้าหน้าที่จะตรวจสอบสลิปและดำเนินการจัดส่งโดยเร็วที่สุด</p>' : ''),
             showCancelButton: true,
             confirmButtonText: 'พิมพ์ใบเสร็จ',
             cancelButtonText: 'ปิด',
@@ -821,16 +928,13 @@ async function checkout(guestData = null) {
             }
 
             cart = [];
+            currentSlip = null;
             updateCart();
             document.getElementById('order-notes').value = '';
             fetchAllData();
         });
     } else {
-        Swal.fire({
-            icon: 'error',
-            title: 'ผิดพลาด',
-            text: response ? response.message : 'Unknown Error'
-        });
+        Swal.fire({ icon: 'error', title: 'ผิดพลาด', text: response ? response.message : 'Unknown Error' });
     }
 }
 

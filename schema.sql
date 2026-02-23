@@ -31,8 +31,13 @@ CREATE TABLE orders (
   payment_method TEXT,
   status TEXT DEFAULT 'pending',
   channel TEXT DEFAULT 'POS',
+  customer_name TEXT,
+  customer_address TEXT,
+  customer_phone TEXT,
   notes TEXT,
   items TEXT, -- JSON string of items for easy retrieval
+  slip_image TEXT,
+  payment_details TEXT,
   created_by TEXT, -- Audit: User ID or Username
   created_by_name TEXT, -- Audit: User Name at time of sale
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

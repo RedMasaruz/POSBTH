@@ -280,6 +280,15 @@
                                         data-bs-target="#orders" type="button" role="tab">จัดการคำสั่งซื้อ</button>
                                 </li>
                                 <li class="nav-item" role="presentation">
+                                    <button class="nav-link position-relative" id="verify-tab" data-bs-toggle="tab"
+                                        data-bs-target="#verify" type="button" role="tab">
+                                        ตรวจสอบการโอน
+                                        <span id="pending-verify-count"
+                                            class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                                            style="display: none;">0</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="inventory-tab" data-bs-toggle="tab"
                                         data-bs-target="#inventory" type="button" role="tab">ประวัติสต็อก</button>
                                 </li>
@@ -343,14 +352,22 @@
                                         <table class="table">
                                             <thead>
                                                 <tr style="cursor: pointer; user-select: none;">
-                                                    <th width="60" data-sort="id">รหัส <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th data-sort="name">ชื่อสินค้า <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="100" data-sort="sku">SKU <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="100" data-sort="price">ราคา <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="100" data-sort="cost">ต้นทุน <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="100" data-sort="stock">คงเหลือ <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="100" data-sort="unit">หน่วย <i class="bi bi-arrow-down-up small text-muted"></i></th>
-                                                    <th width="120" data-sort="category">หมวดหมู่ <i class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="60" data-sort="id">รหัส <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th data-sort="name">ชื่อสินค้า <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="100" data-sort="sku">SKU <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="100" data-sort="price">ราคา <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="100" data-sort="cost">ต้นทุน <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="100" data-sort="stock">คงเหลือ <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="100" data-sort="unit">หน่วย <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
+                                                    <th width="120" data-sort="category">หมวดหมู่ <i
+                                                            class="bi bi-arrow-down-up small text-muted"></i></th>
                                                     <th width="100">จัดการ</th>
                                                 </tr>
                                             </thead>
@@ -558,6 +575,33 @@
                                             </div>
                                         </div>
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- Payment Verification Tab -->
+                            <div class="tab-pane fade" id="verify" role="tabpanel">
+                                <div class="d-flex justify-content-between align-items-center mb-4">
+                                    <h5 class="mb-0 fw-bold">ตรวจสอบยอดโอนและพร้อมเพย์</h5>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="fetchOrders()">
+                                        <i class="bi bi-arrow-clockwise me-1"></i>รีเฟรช
+                                    </button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>เลขที่ออร์เดอร์</th>
+                                                <th>วันที่/เวลา</th>
+                                                <th>ลูกค้า</th>
+                                                <th>ยอดเงิน</th>
+                                                <th>หลักฐาน</th>
+                                                <th class="text-center">จัดการ</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="verify-orders-table">
+                                            <!-- Dynamic Content -->
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
