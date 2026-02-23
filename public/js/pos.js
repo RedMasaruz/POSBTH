@@ -373,8 +373,8 @@ function renderProductGrid() {
         } else if (currentSort === 'price-desc') {
             return priceB - priceA;
         } else {
-            // Default: Sort by Name or ID
-            return a.name.localeCompare(b.name, 'th');
+            // Default: Sort by ID (Logical grouping)
+            return a.id.localeCompare(b.id);
         }
     });
 

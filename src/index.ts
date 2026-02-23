@@ -298,7 +298,7 @@ app.get('/api/analytics', async (c) => {
 // Get all products
 app.get('/api/products', async (c) => {
   try {
-    const { results } = await c.env.DB.prepare('SELECT * FROM products ORDER BY name').all();
+    const { results } = await c.env.DB.prepare('SELECT * FROM products ORDER BY id').all();
     return c.json(results);
   } catch (e: any) {
     return errorResponse(c, e.message, 500);
@@ -323,7 +323,11 @@ app.post('/api/products', async (c) => {
       return errorResponse(c, 'Missing required fields: name, sku, price');
     }
 
-    const id = generateId('P');
+    const id = body.id || generateId('P');
+
+    // Check if ID exists
+    const existingId = await c.env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(id).first();
+    if (existingId) return errorResponse(c, `Product ID ${id} already exists`, 400);
 
     // Check SKU uniqueness
     const existing = await c.env.DB.prepare('SELECT id FROM products WHERE sku = ?').bind(body.sku).first();
@@ -361,6 +365,15 @@ app.put('/api/products/:id', async (c) => {
 
     if (!id) return errorResponse(c, 'Product ID missing');
 
+    const newId = body.id || id;
+    const isIdChanging = newId !== id;
+
+    // Check if newId exists if it's changing
+    if (isIdChanging) {
+      const existing = await c.env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(newId).first();
+      if (existing) return errorResponse(c, `ID ${newId} already exists`);
+    }
+
     const updates = [];
     const values = [];
 
@@ -369,6 +382,12 @@ app.put('/api/products/:id', async (c) => {
       'name', 'sku', 'price', 'cost', 'price_dealer', 'price_vip',
       'stock', 'min_stock', 'unit', 'category', 'image'
     ];
+
+    // Add id if changing
+    if (isIdChanging) {
+      updates.push(`id = ?`);
+      values.push(newId);
+    }
 
     for (const field of fields) {
       if (body[field] !== undefined) {
@@ -386,11 +405,22 @@ app.put('/api/products/:id', async (c) => {
 
     values.push(id); // For WHERE clause
 
+    const statements = [];
+
+    // 1. Update Products
     const query = `UPDATE products SET ${updates.join(', ')} WHERE id = ?`;
+    statements.push(c.env.DB.prepare(query).bind(...values));
 
-    await c.env.DB.prepare(query).bind(...values).run();
+    if (isIdChanging) {
+      // 2. Update order_items
+      statements.push(c.env.DB.prepare('UPDATE order_items SET product_id = ? WHERE product_id = ?').bind(newId, id));
+      // 3. Update inventory_log
+      statements.push(c.env.DB.prepare('UPDATE inventory_log SET product_id = ? WHERE product_id = ?').bind(newId, id));
+    }
 
-    return c.json({ success: true, message: 'Product updated' });
+    await c.env.DB.batch(statements);
+
+    return c.json({ success: true, message: 'Product updated', newId: isIdChanging ? newId : undefined });
   } catch (e: any) {
     return errorResponse(c, e.message, 500);
   }

@@ -4,6 +4,8 @@ let orders = [];
 let salesChart = null;
 let productsChart = null;
 let updateInterval = null;
+let currentSortCol = 'id';
+let currentSortDir = 'asc';
 
 // Initialize Admin
 document.addEventListener('DOMContentLoaded', () => {
@@ -47,6 +49,8 @@ function fetchProducts() {
     apiRequest('/products').then(data => {
         if (data) {
             products = data;
+            // Apply default sort on fetch if not already sorted by API
+            sortProducts(currentSortCol, currentSortDir, false);
             renderAdminProductsTable();
             renderLowStockItems();
         }
@@ -309,6 +313,46 @@ function formatDateShort(dateStr) {
     return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
 }
 
+// --- Product Sorting Logic ---
+function sortProducts(column, direction, shouldRender = true) {
+    currentSortCol = column;
+    currentSortDir = direction;
+
+    products.sort((a, b) => {
+        let valA = a[column];
+        let valB = b[column];
+
+        // Handle numeric values
+        if (['price', 'cost', 'stock'].includes(column)) {
+            valA = parseFloat(valA) || 0;
+            valB = parseFloat(valB) || 0;
+            if (valA < valB) return direction === 'asc' ? -1 : 1;
+            if (valA > valB) return direction === 'asc' ? 1 : -1;
+            return 0;
+        } else {
+            // Use localeCompare for Thai and other strings
+            const comparison = String(valA || '').localeCompare(String(valB || ''), 'th');
+            return direction === 'asc' ? comparison : -comparison;
+        }
+    });
+
+    if (shouldRender) {
+        renderAdminProductsTable();
+        updateSortIcons();
+    }
+}
+
+function updateSortIcons() {
+    document.querySelectorAll('#products thead th[data-sort]').forEach(th => {
+        const icon = th.querySelector('i');
+        if (th.dataset.sort === currentSortCol) {
+            icon.className = `bi bi-sort-${currentSortDir === 'asc' ? 'down' : 'up'} text-primary`;
+        } else {
+            icon.className = 'bi bi-arrow-down-up small text-muted';
+        }
+    });
+}
+
 async function loadDashboardData() {
     const filterSelect = document.getElementById('date-filter');
     const filter = filterSelect ? filterSelect.value : 'today';
@@ -316,22 +360,16 @@ async function loadDashboardData() {
 
     // UX: Show loading state
     const refreshBtn = document.getElementById('refresh-dashboard-btn');
-    const originalIcon = refreshBtn ? refreshBtn.innerHTML : '';
     if (refreshBtn) {
         refreshBtn.disabled = true;
-        refreshBtn.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>';
+        refreshBtn.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div>';
     }
 
     try {
-        // Fetch stats (and products/orders if needed, but usually just stats here)
         await fetchDashboardStats(dates);
-        // Optionally fetch other data if needed for fresh view
-        // await fetchAllData(); 
-
     } catch (error) {
         console.error("Dashboard Load Error:", error);
     } finally {
-        // UX: Reset loading state
         if (refreshBtn) {
             refreshBtn.disabled = false;
             refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
@@ -550,29 +588,74 @@ function handleImageUpload(input) {
 function showAddProductModal() {
     Swal.fire({
         title: 'เพิ่มสินค้าใหม่',
+        width: '650px',
         html: `
-            <div class="text-center mb-3">
-                <img id="preview-image" src="https://via.placeholder.com/150x150?text=Preview" 
-                     style="width: 120px; height: 120px; object-fit: cover; border-radius: 12px; display: none; margin: 0 auto;">
+            <div class="text-center mb-4">
+                <div class="position-relative d-inline-block">
+                    <img id="preview-image" src="https://via.placeholder.com/150x150?text=Preview" 
+                         style="width: 140px; height: 140px; object-fit: cover; border-radius: 16px; display: none; border: 2px dashed var(--border-color); padding: 5px;">
+                    <div id="image-placeholder" style="width: 140px; height: 140px; border-radius: 16px; border: 2px dashed var(--border-color); display: flex; align-items: center; justify-content: center; background: var(--bg-surface);">
+                        <i class="bi bi-image text-muted" style="font-size: 2rem;"></i>
+                    </div>
+                </div>
             </div>
-            <input id="swal-name" class="swal2-input" placeholder="ชื่อสินค้า">
-            <input id="swal-sku" class="swal2-input" placeholder="รหัส SKU">
-            <div class="d-flex gap-2">
-                <input id="swal-price" type="number" class="swal2-input" placeholder="ราคาขาย (หน้าร้าน)" step="0.01" min="0">
-                <input id="swal-cost" type="number" class="swal2-input" placeholder="ต้นทุน" step="0.01" min="0">
-            </div>
-            <div class="d-flex gap-2">
-                <input id="swal-price-dealer" type="number" class="swal2-input" placeholder="ราคาตัวแทนย่อย (70%)" step="0.01" min="0">
-                <input id="swal-price-vip" type="number" class="swal2-input" placeholder="ราคาตัวแทนใหญ่ (60%)" step="0.01" min="0">
-            </div>
-            <input id="swal-stock" type="number" class="swal2-input" placeholder="จำนวนเริ่มต้น" min="0">
-            <input id="swal-unit" class="swal2-input" placeholder="หน่วยนับ (เช่น ชิ้น, กล่อง)">
-            <input id="swal-category" class="swal2-input" placeholder="หมวดหมู่ (เช่น เครื่องดื่ม)">
-            
-            <div class="file-upload-container mt-3 text-start">
-                <label class="form-label small text-muted">รูปสินค้า (Upload หรือใส่ URL)</label>
-                <input id="swal-image-file" type="file" class="form-control mb-2" accept="image/*" onchange="handleImageUpload(this)">
-                <input id="swal-image" class="swal2-input mt-0" placeholder="หรือวางลิงก์รูปภาพที่นี่ (URL)">
+
+            <div class="row g-3 text-start">
+                <div class="col-12">
+                    <label class="form-label">ชื่อสินค้า</label>
+                    <input id="swal-name" class="form-control" placeholder="ระบุชื่อสินค้า">
+                </div>
+                
+                <div class="col-md-6">
+                    <label class="form-label">รหัสสินค้า (Product ID)</label>
+                    <input id="swal-id" class="form-control" placeholder="เช่น V001 (เว้นว่างเพื่อเจนออโต้)">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">รหัส SKU / Barcode</label>
+                    <input id="swal-sku" class="form-control" placeholder="ระบุ SKU">
+                </div>
+
+                <div class="col-md-4">
+                    <label class="form-label">ราคาขาย (หน้าร้าน)</label>
+                    <input id="swal-price" type="number" class="form-control fw-bold text-primary" placeholder="0.00" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">ราคาตัวแทนย่อย (70%)</label>
+                    <input id="swal-price-dealer" type="number" class="form-control" placeholder="0.00" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">ราคาตัวแทนใหญ่ (60%)</label>
+                    <input id="swal-price-vip" type="number" class="form-control" placeholder="0.00" step="0.01" min="0">
+                </div>
+
+                <div class="col-md-4">
+                    <label class="form-label">ต้นทุน</label>
+                    <input id="swal-cost" type="number" class="form-control" placeholder="0.00" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">จำนวนสต็อก</label>
+                    <input id="swal-stock" type="number" class="form-control" placeholder="0" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">หน่วยนับ</label>
+                    <input id="swal-unit" class="form-control" placeholder="เช่น ชิ้น, ถุง">
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label">หมวดหมู่</label>
+                    <input id="swal-category" class="form-control" placeholder="ระบุหมวดหมู่">
+                </div>
+
+                <div class="col-12">
+                    <div class="p-3 border rounded-3 bg-light">
+                        <label class="form-label d-block">รูปสินค้า</label>
+                        <input id="swal-image-file" type="file" class="form-control mb-2" accept="image/*" onchange="handleImageUpload(this)">
+                        <div class="input-group">
+                            <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-link-45deg"></i></span>
+                            <input id="swal-image" class="form-control border-start-0 ps-0" placeholder="หรือวาง URL รูปภาพที่นี่">
+                        </div>
+                    </div>
+                </div>
             </div>
         `,
         focusConfirm: false,
@@ -604,6 +687,7 @@ function showAddProductModal() {
             vipInput.addEventListener('input', () => vipInput.dataset.auto = 'false');
         },
         preConfirm: () => {
+            const id = document.getElementById('swal-id').value;
             const name = document.getElementById('swal-name').value;
             const sku = document.getElementById('swal-sku').value;
             const price = document.getElementById('swal-price').value;
@@ -619,6 +703,7 @@ function showAddProductModal() {
             }
 
             return {
+                id: id,
                 name: name,
                 sku: sku,
                 price: parseFloat(price),
@@ -651,29 +736,68 @@ function showEditProductModal(productId) {
 
     Swal.fire({
         title: 'แก้ไขสินค้า',
+        width: '650px',
         html: `
-            <div class="text-center mb-3">
+            <div class="text-center mb-4">
                 <img id="preview-image" src="${previewSrc}" 
-                     style="width: 120px; height: 120px; object-fit: cover; border-radius: 12px; display: ${previewDisplay}; margin: 0 auto; border: 1px solid #ddd;">
+                     style="width: 140px; height: 140px; object-fit: cover; border-radius: 16px; display: ${previewDisplay}; margin: 0 auto; border: 2px solid var(--accent-primary); padding: 4px;">
             </div>
-            <input id="swal-name" class="swal2-input" placeholder="ชื่อสินค้า" value="${product.name}">
-            <input id="swal-sku" class="swal2-input" placeholder="รหัส SKU" value="${product.sku}">
-            <div class="d-flex gap-2">
-                <input id="swal-price" type="number" class="swal2-input" placeholder="ราคาขาย (หน้าร้าน)" value="${product.price}" step="0.01" min="0">
-                <input id="swal-cost" type="number" class="swal2-input" placeholder="ต้นทุน" value="${product.cost || 0}" step="0.01" min="0">
-            </div>
-            <div class="d-flex gap-2">
-                <input id="swal-price-dealer" type="number" class="swal2-input" placeholder="ราคาตัวแทนย่อย (70%)" value="${product.price_dealer || 0}" step="0.01" min="0">
-                <input id="swal-price-vip" type="number" class="swal2-input" placeholder="ราคาตัวแทนใหญ่ (60%)" value="${product.price_vip || 0}" step="0.01" min="0">
-            </div>
-            <input id="swal-stock" type="number" class="swal2-input" placeholder="จำนวนคงเหลือ" value="${product.stock}" min="0">
-            <input id="swal-unit" class="swal2-input" placeholder="หน่วยนับ" value="${product.unit}">
-            <input id="swal-category" class="swal2-input" placeholder="หมวดหมู่" value="${product.category || ''}">
-            
-            <div class="file-upload-container mt-3 text-start">
-                <label class="form-label small text-muted">รูปสินค้า (Upload หรือใส่ URL)</label>
-                <input id="swal-image-file" type="file" class="form-control mb-2" accept="image/*" onchange="handleImageUpload(this)">
-                <input id="swal-image" class="swal2-input mt-0" placeholder="หรือวางลิงก์รูปภาพที่นี่ (URL)" value="${product.image || ''}">
+            <div class="row g-3 text-start">
+                <div class="col-12">
+                    <label class="form-label">ชื่อสินค้า</label>
+                    <input id="swal-name" class="form-control fw-bold" placeholder="ระบุชื่อสินค้า" value="${product.name}">
+                </div>
+                
+                <div class="col-md-6">
+                    <label class="form-label">รหัสสินค้า (Product ID)</label>
+                    <input id="swal-id" class="form-control" placeholder="รหัสสินค้า" value="${product.id}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">รหัส SKU / Barcode</label>
+                    <input id="swal-sku" class="form-control" placeholder="รหัส SKU" value="${product.sku}">
+                </div>
+
+                <div class="col-md-4">
+                    <label class="form-label text-primary">ราคาขาย (ปกติ)</label>
+                    <input id="swal-price" type="number" class="form-control fw-bold text-primary" placeholder="0.00" value="${product.price}" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">ราคาตัวแทนย่อย (70%)</label>
+                    <input id="swal-price-dealer" type="number" class="form-control" placeholder="0.00" value="${product.price_dealer || 0}" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">ราคาตัวแทนใหญ่ (60%)</label>
+                    <input id="swal-price-vip" type="number" class="form-control" placeholder="0.00" value="${product.price_vip || 0}" step="0.01" min="0">
+                </div>
+
+                <div class="col-md-4">
+                    <label class="form-label">ต้นทุน</label>
+                    <input id="swal-cost" type="number" class="form-control" placeholder="0.00" value="${product.cost || 0}" step="0.01" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">คงเหลือ</label>
+                    <input id="swal-stock" type="number" class="form-control fw-bold" placeholder="0" value="${product.stock}" min="0">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">หน่วยนับ</label>
+                    <input id="swal-unit" class="form-control" placeholder="หน่วยนับ" value="${product.unit}">
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label">หมวดหมู่</label>
+                    <input id="swal-category" class="form-control" placeholder="ระบุหมวดหมู่" value="${product.category || ''}">
+                </div>
+
+                <div class="col-12">
+                    <div class="p-3 border rounded-3 bg-light">
+                        <label class="form-label d-block">รูปสินค้า</label>
+                        <input id="swal-image-file" type="file" class="form-control mb-2" accept="image/*" onchange="handleImageUpload(this)">
+                        <div class="input-group">
+                            <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-link-45deg"></i></span>
+                            <input id="swal-image" class="form-control border-start-0 ps-0" placeholder="URL รูปสินค้า" value="${product.image || ''}">
+                        </div>
+                    </div>
+                </div>
             </div>
         `,
         focusConfirm: false,
@@ -704,6 +828,7 @@ function showEditProductModal(productId) {
             vipInput.addEventListener('input', () => vipInput.dataset.manual = 'true');
         },
         preConfirm: () => {
+            const id = document.getElementById('swal-id').value;
             const name = document.getElementById('swal-name').value;
             const price = document.getElementById('swal-price').value;
             const cost = document.getElementById('swal-cost').value;
@@ -718,7 +843,8 @@ function showEditProductModal(productId) {
             }
 
             return {
-                id: productId,
+                id: id,
+                oldId: productId,
                 name: name,
                 sku: document.getElementById('swal-sku').value,
                 price: parseFloat(price),
@@ -756,7 +882,8 @@ function saveProduct(data) {
 }
 
 function updateProduct(data) {
-    apiRequest('/products/' + data.id, 'PUT', data).then(response => {
+    const targetId = data.oldId || data.id;
+    apiRequest('/products/' + targetId, 'PUT', data).then(response => {
         if (response && response.success) {
             Swal.fire({
                 icon: 'success',
@@ -970,7 +1097,7 @@ function initCharts() {
 }
 
 function setupEventListeners() {
-    const logoutBtn = document.getElementById('logout-logout-btn') || document.getElementById('logout-btn'); // Admin has logout
+    const logoutBtn = document.getElementById('logout-logout-btn') || document.getElementById('logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', () => {
         window.location.href = '/';
     });
@@ -991,6 +1118,15 @@ function setupEventListeners() {
             if (e.key === 'Enter') searchOrders();
         });
     }
+
+    // Add sorting listeners for Products Table
+    document.querySelectorAll('#products thead th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.dataset.sort;
+            const dir = (col === currentSortCol && currentSortDir === 'asc') ? 'desc' : 'asc';
+            sortProducts(col, dir);
+        });
+    });
 }
 // --- User Management Logic ---
 
