@@ -1,10 +1,18 @@
 const API_AUTH = '/api/auth/login';
 
+// ==========================================
+// 🔒 Secure Session Management (JWT)
+// ==========================================
+
+// Get JWT Token
+function getToken() {
+    return localStorage.getItem('pos_token');
+}
+
 // Check if user is logged in
 function checkSession(shouldRedirect = true) {
     const user = getUser();
     if (!user) {
-        // If not on login page, redirect only if requested
         if (shouldRedirect && !window.location.pathname.includes('login.html')) {
             window.location.href = '/login.html';
         }
@@ -42,8 +50,19 @@ async function login() {
 
         const data = await response.json();
 
+        if (response.status === 429) {
+            Swal.fire({
+                icon: 'error',
+                title: 'ถูกล็อกชั่วคราว',
+                text: 'คุณพยายามเข้าสู่ระบบมากเกินไป กรุณารอ 60 วินาที',
+                timer: 5000
+            });
+            return;
+        }
+
         if (response.ok && data.success) {
-            // Store User Session
+            // Store JWT Token + User Session
+            localStorage.setItem('pos_token', data.token);
             localStorage.setItem('pos_user', JSON.stringify(data.user));
 
             Swal.fire({
@@ -53,7 +72,7 @@ async function login() {
                 timer: 1500,
                 showConfirmButton: false
             }).then(() => {
-                window.location.href = '/'; // Go to POS
+                window.location.href = '/';
             });
         } else {
             Swal.fire({ icon: 'error', title: 'เข้าสู่ระบบไม่สำเร็จ', text: data.message || 'รหัสผ่านผิด' });
@@ -63,25 +82,23 @@ async function login() {
     }
 }
 
-const logoutAdmin = logout; // Alias for compatibility with admin.html
+const logoutAdmin = logout;
 
 function logout() {
     localStorage.removeItem('pos_user');
+    localStorage.removeItem('pos_token');
     window.location.href = '/login.html';
 }
 
-// For backward compatibility / role checking helper
+// Role checking helper
 function hasPermission(action) {
     const user = getUser();
     if (!user) return false;
-
-    // Owner can do everything
     if (user.role === 'owner') return true;
 
-    // Permissions Matrix
-    if (action === 'delete_order') return false; // Staff/Dealer cannot delete
-    if (action === 'edit_stock') return false;   // Staff/Dealer cannot edit stock
+    if (action === 'delete_order') return false;
+    if (action === 'edit_stock') return false;
     if (action === 'view_dashboard') return user.role === 'owner';
 
-    return true; // Default allow selling
+    return true;
 }

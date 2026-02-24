@@ -43,6 +43,7 @@ function fetchAllData() {
     fetchOrders();
     fetchSettings();
     fetchDashboardStats();
+    fetchInventoryLog();
 }
 
 function fetchProducts() {
@@ -530,7 +531,7 @@ function restockProduct(productId) {
 
 // Add/Edit Product Modals and Logic...
 // (Assuming Image Handling Helper is also needed in Admin)
-function handleImageUpload(input) {
+async function handleImageUpload(input) {
     const file = input.files[0];
     if (!file) return;
 
@@ -538,52 +539,30 @@ function handleImageUpload(input) {
     const originalText = input.previousElementSibling.textContent;
     input.previousElementSibling.textContent = 'กำลังประมวลผลรูปภาพ...';
 
-    const reader = new FileReader();
-    reader.onload = function (e) {
-        const img = new Image();
-        img.src = e.target.result;
-        img.onload = function () {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const MAX_WIDTH = 500;
-            const MAX_HEIGHT = 500;
-            let width = img.width;
-            let height = img.height;
+    try {
+        const compressedDataUrl = await compressImage(file, 800, 800, 0.7);
 
-            if (width > height) {
-                if (width > MAX_WIDTH) {
-                    height *= MAX_WIDTH / width;
-                    width = MAX_WIDTH;
-                }
-            } else {
-                if (height > MAX_HEIGHT) {
-                    width *= MAX_HEIGHT / height;
-                    height = MAX_HEIGHT;
-                }
-            }
-            canvas.width = width;
-            canvas.height = height;
-            ctx.drawImage(img, 0, 0, width, height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        const urlInput = document.getElementById('swal-image');
+        const preview = document.getElementById('preview-image');
 
-            const urlInput = document.getElementById('swal-image');
-            const preview = document.getElementById('preview-image');
+        if (urlInput) {
+            urlInput.value = compressedDataUrl;
+            urlInput.style.backgroundColor = '#dcfce7';
+            setTimeout(() => urlInput.style.backgroundColor = '', 500);
+        }
+        if (preview) {
+            preview.src = compressedDataUrl;
+            preview.style.display = 'block';
+        }
 
-            if (urlInput) {
-                urlInput.value = dataUrl;
-                urlInput.style.backgroundColor = '#dcfce7';
-                setTimeout(() => urlInput.style.backgroundColor = '', 500);
-            }
-            if (preview) {
-                preview.src = dataUrl;
-                preview.style.display = 'block';
-            }
-
-            input.disabled = false;
-            input.previousElementSibling.textContent = originalText;
-        };
-    };
-    reader.readAsDataURL(file);
+        input.disabled = false;
+        input.previousElementSibling.textContent = originalText;
+    } catch (error) {
+        console.error('Image processing failed:', error);
+        Swal.fire('Error', 'ไม่สามารถประมวลผลรูปภาพได้', 'error');
+        input.disabled = false;
+        input.previousElementSibling.textContent = originalText;
+    }
 }
 
 function showAddProductModal() {
@@ -954,7 +933,16 @@ function renderAdminOrdersTable() {
             <td>${items.slice(0, 2).map(item => item.name).join(', ')}${items.length > 2 ? '...' : ''}</td>
             <td>${items.reduce((sum, item) => sum + item.quantity, 0)}</td>
             <td>${formatCurrency(order.total)}</td>
-            <td>${order.payment_method}</td>
+            <td>
+                <div class="d-flex align-items-center gap-2">
+                    ${order.payment_method}
+                    ${order.slip_image ? `
+                        <button class="btn btn-xs btn-outline-info py-0 px-1" onclick="viewSlip('${order.id}')" title="ดูสลิป">
+                            <i class="bi bi-image" style="font-size: 0.8rem;"></i>
+                        </button>
+                    ` : ''}
+                </div>
+            </td>
             <td><span class="status-badge ${order.status === 'completed' ? 'status-success' : 'status-warning'}">${order.status}</span></td>
             <td>
                 <div class="btn-group btn-group-sm">
@@ -1147,11 +1135,203 @@ function printReceipt(orderId) {
     receiptWindow.document.close();
 }
 
+function testPrintReceipt() {
+    const storeName = document.getElementById('store-name')?.value || settings?.store_name || 'ร้านค้า';
+    const header = document.getElementById('receipt-header')?.value || 'ใบเสร็จรับเงิน';
+    const footer = document.getElementById('receipt-footer')?.value || 'ขอบคุณที่ใช้บริการ';
+
+    const receiptWindow = window.open('', '_blank');
+    const receipt = `
+        <!DOCTYPE html><html><head><title>ทดสอบใบเสร็จ</title>
+        <style>body{font-family:'Sarabun',sans-serif;max-width:300px;margin:0 auto;padding:20px;font-size:14px}
+        h3{text-align:center;margin:0}p{margin:4px 0}hr{border:1px dashed #000}
+        .center{text-align:center}.total{font-size:18px;font-weight:bold}</style></head>
+        <body>
+        <h3>${storeName}</h3>
+        <p class="center" style="white-space:pre-line">${header.replace(/\\n/g, '\n')}</p>
+        <hr>
+        <p>เลขที่: TEST-001</p>
+        <p>วันที่: ${new Date().toLocaleString('th-TH')}</p>
+        <hr>
+        <p>สินค้าตัวอย่าง A x 2 = ฿200.00</p>
+        <p>สินค้าตัวอย่าง B x 1 = ฿150.00</p>
+        <hr>
+        <p class="total">ยอดรวม: ฿350.00</p>
+        <p>ชำระ: เงินสด ฿400.00</p>
+        <p>ทอน: ฿50.00</p>
+        <hr>
+        <p class="center" style="white-space:pre-line">${footer.replace(/\\n/g, '\n')}</p>
+        <p class="center" style="color:#999;font-size:11px">--- ทดสอบพิมพ์ ---</p>
+        <script>setTimeout(() => { window.print(); }, 500);</script>
+        </body></html>
+    `;
+    receiptWindow.document.write(receipt);
+    receiptWindow.document.close();
+}
+
+// --- Inventory Management ---
+
+function fetchInventoryLog() {
+    apiRequest('/inventory').then(data => {
+        if (data) {
+            renderInventoryLog(data);
+        }
+    });
+}
+
+function renderInventoryLog(logs) {
+    const tbody = document.getElementById('inventory-log-table');
+    if (!tbody) return;
+
+    if (!logs || logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">ยังไม่มีประวัติสต็อก</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = logs.map(log => {
+        const isPositive = log.quantity_change > 0;
+        const badgeClass = isPositive ? 'bg-success' : 'bg-danger';
+        const sign = isPositive ? '+' : '';
+        const actionBadge = {
+            'Restock': 'bg-primary',
+            'Damaged': 'bg-warning text-dark',
+            'Correction': 'bg-info text-dark',
+            'Returned': 'bg-secondary',
+            'Sale': 'bg-danger',
+            'Order Cancelled': 'bg-success',
+            'Initial Stock': 'bg-primary'
+        }[log.action] || 'bg-secondary';
+
+        return `<tr>
+            <td><small>${new Date(log.timestamp).toLocaleString('th-TH')}</small></td>
+            <td><span class="badge ${actionBadge}">${log.action}</span></td>
+            <td><code>${log.product_id}</code></td>
+            <td>${log.product_name}</td>
+            <td><span class="badge ${badgeClass}">${sign}${log.quantity_change}</span></td>
+            <td class="fw-bold">${log.new_stock}</td>
+            <td><small class="text-muted">${log.reference || '-'}</small></td>
+        </tr>`;
+    }).join('');
+}
+
 function showAdjustStockModal() {
-    // ... Copy adjust logic if needed ...
+    if (!products || products.length === 0) {
+        Swal.fire({ icon: 'warning', title: 'ไม่มีสินค้า', text: 'กรุณาเพิ่มสินค้าก่อน' });
+        return;
+    }
+
+    const productOptions = products.map(p =>
+        `<option value="${p.id}">${p.name} (คงเหลือ: ${p.stock})</option>`
+    ).join('');
+
     Swal.fire({
-        title: 'กำลังพัฒนา',
-        text: 'ฟีเจอร์นี้กำลังมาในเร็วๆนี้'
+        title: 'ปรับสต็อกสินค้า',
+        html: `
+            <div class="text-start">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">เลือกสินค้า</label>
+                    <select class="form-select" id="adjust-product">${productOptions}</select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">ประเภทการปรับ</label>
+                    <select class="form-select" id="adjust-action">
+                        <option value="Restock">📦 รับสินค้าเข้า (เพิ่ม)</option>
+                        <option value="Damaged">💔 สินค้าเสียหาย (ลด)</option>
+                        <option value="Correction">🔧 แก้ไขยอด (เพิ่ม/ลด)</option>
+                        <option value="Returned">↩️ รับคืนจากลูกค้า (เพิ่ม)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">จำนวน</label>
+                    <input type="number" class="form-control" id="adjust-quantity" min="1" value="1" placeholder="จำนวนที่ต้องการปรับ">
+                    <small class="text-muted" id="adjust-hint">ระบบจะเพิ่มจำนวนนี้เข้าสต็อก</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">เหตุผล/หมายเหตุ</label>
+                    <input type="text" class="form-control" id="adjust-reference" placeholder="เช่น: รับสินค้าล็อตใหม่, หลุด QC">
+                </div>
+            </div>
+        `,
+        showCancelButton: true,
+        confirmButtonText: '✅ ยืนยันปรับสต็อก',
+        cancelButtonText: 'ยกเลิก',
+        confirmButtonColor: '#198754',
+        didOpen: () => {
+            const actionSelect = document.getElementById('adjust-action');
+            const hint = document.getElementById('adjust-hint');
+            actionSelect.addEventListener('change', () => {
+                const action = actionSelect.value;
+                if (action === 'Damaged') {
+                    hint.textContent = '⚠️ ระบบจะลดจำนวนนี้ออกจากสต็อก';
+                    hint.className = 'text-danger';
+                } else {
+                    hint.textContent = '✅ ระบบจะเพิ่มจำนวนนี้เข้าสต็อก';
+                    hint.className = 'text-success';
+                }
+            });
+        },
+        preConfirm: () => {
+            const productId = document.getElementById('adjust-product').value;
+            const action = document.getElementById('adjust-action').value;
+            let quantity = parseInt(document.getElementById('adjust-quantity').value);
+            const reference = document.getElementById('adjust-reference').value;
+
+            if (!quantity || quantity <= 0) {
+                Swal.showValidationMessage('กรุณากรอกจำนวนที่มากกว่า 0');
+                return false;
+            }
+
+            // Damaged = negative quantity
+            if (action === 'Damaged') {
+                quantity = -quantity;
+            }
+
+            return { product_id: productId, quantity, action, reference };
+        }
+    }).then(async (result) => {
+        if (result.isConfirmed && result.value) {
+            const res = await apiRequest('/inventory/adjust', 'POST', result.value);
+            if (res && res.success) {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'ปรับสต็อกสำเร็จ',
+                    text: res.message,
+                    timer: 2000,
+                    showConfirmButton: false
+                });
+                fetchProducts();
+                fetchInventoryLog();
+            }
+        }
+    });
+}
+
+function exportInventory() {
+    apiRequest('/inventory').then(data => {
+        if (!data || data.length === 0) {
+            Swal.fire({ icon: 'info', title: 'ไม่มีข้อมูล', text: 'ยังไม่มีประวัติสต็อก' });
+            return;
+        }
+
+        const headers = ['เวลา', 'การกระทำ', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวนที่เปลี่ยน', 'คงเหลือใหม่', 'อ้างอิง'];
+        const rows = data.map(log => [
+            new Date(log.timestamp).toLocaleString('th-TH'),
+            log.action,
+            log.product_id,
+            log.product_name,
+            log.quantity_change,
+            log.new_stock,
+            log.reference || ''
+        ]);
+
+        const csv = '\uFEFF' + [headers, ...rows].map(row => row.join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `inventory_log_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
     });
 }
 
@@ -1202,6 +1382,8 @@ function setupEventListeners() {
             const targetId = event.target.getAttribute('data-bs-target');
             if (targetId === '#orders') {
                 renderAdminOrdersTable();
+            } else if (targetId === '#transfer') {
+                renderTransferHistoryTable();
             }
         });
     });
@@ -1387,6 +1569,79 @@ function confirmDeleteUser(userId, username) {
     });
 }
 
+// --- Order Export (CSV) ---
+function exportOrders() {
+    if (!orders || orders.length === 0) {
+        Swal.fire({ icon: 'info', title: 'ไม่มีข้อมูล', text: 'ยังไม่มีคำสั่งซื้อ' });
+        return;
+    }
+
+    const headers = ['รหัสออร์เดอร์', 'วันที่', 'ผู้ขาย', 'สินค้า', 'ยอดรวม', 'ส่วนลด', 'สุทธิ', 'ช่องทางชำระเงิน', 'สถานะ', 'ช่องทาง', 'หมายเหตุ'];
+    const rows = orders.map(o => {
+        let itemsSummary = '';
+        try {
+            const items = typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []);
+            itemsSummary = items.map(i => `${i.name || i.product_id} x${i.quantity}`).join(' | ');
+        } catch (e) { itemsSummary = '-'; }
+
+        return [
+            o.id,
+            new Date(o.created_at).toLocaleString('th-TH'),
+            o.created_by_name || o.created_by || '-',
+            `"${itemsSummary}"`,
+            o.subtotal,
+            o.tax,
+            o.total,
+            o.payment_method || '-',
+            o.status,
+            o.channel || 'POS',
+            `"${(o.notes || '').replace(/"/g, '""')}"`
+        ];
+    });
+
+    const csv = '\uFEFF' + [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `orders_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    Swal.fire({ icon: 'success', title: 'สำเร็จ', text: `ส่งออก ${orders.length} รายการ`, timer: 1500, showConfirmButton: false });
+}
+
+// --- Login Audit Log ---
+function fetchLoginLog() {
+    apiRequest('/login-log').then(data => {
+        const tbody = document.getElementById('login-log-table');
+        if (!tbody) return;
+
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">ยังไม่มีประวัติการเข้าสู่ระบบ</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(log => {
+            const badge = log.success
+                ? '<span class="badge bg-success">สำเร็จ</span>'
+                : '<span class="badge bg-danger">ล้มเหลว</span>';
+
+            // Parse user agent to short browser name
+            let browser = log.user_agent || '-';
+            if (browser.length > 60) browser = browser.substring(0, 60) + '...';
+
+            return `<tr class="${!log.success ? 'table-danger' : ''}">
+                <td><small>${new Date(log.timestamp).toLocaleString('th-TH')}</small></td>
+                <td><code>${log.username}</code></td>
+                <td>${badge}</td>
+                <td><small>${log.ip_address || '-'}</small></td>
+                <td><small class="text-muted">${browser}</small></td>
+            </tr>`;
+        }).join('');
+    });
+}
+
 function startLiveUpdates() {
     // interval 15 seconds
     updateInterval = setInterval(() => {
@@ -1398,4 +1653,42 @@ function startLiveUpdates() {
         fetchOrders();
         fetchDashboardStats();
     }, 15000);
+}
+function renderTransferHistoryTable() {
+    const tbody = document.getElementById('transfer-history-table');
+    if (!tbody) return;
+
+    const transferOrders = orders.filter(o => o.payment_method === 'โอนเงินกสิกร' || o.payment_method === 'พร้อมเพย์' || o.payment_method === 'โอนผ่านธนาคาร');
+
+    if (transferOrders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">ไม่พบประวัติยอดโอน</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = transferOrders.map(order => `
+        <tr>
+            <td>
+                <div>${new Date(order.created_at).toLocaleDateString('th-TH')}</div>
+                <div class="small text-muted">${new Date(order.created_at).toLocaleTimeString('th-TH')}</div>
+            </td>
+            <td><span class="fw-bold">${order.id}</span></td>
+            <td>
+                <div>${order.customer_name || 'Guest'}</div>
+                <div class="small text-muted">${order.customer_phone || '-'}</div>
+            </td>
+            <td><span class="fw-bold text-primary">${formatCurrency(order.total)}</span></td>
+            <td>
+                ${order.slip_image ? `
+                    <button class="btn btn-sm btn-outline-info" onclick="viewSlip('${order.id}')">
+                        <i class="bi bi-image"></i> ดูสลิป
+                    </button>
+                ` : '<span class="text-muted small">ไม่มีสลิป</span>'}
+            </td>
+            <td>
+                <span class="badge ${order.status === 'completed' ? 'bg-success' : 'bg-warning'}">
+                    ${order.status === 'completed' ? 'สำเร็จ' : 'รอตรวจสอบ'}
+                </span>
+            </td>
+        </tr>
+    `).join('');
 }

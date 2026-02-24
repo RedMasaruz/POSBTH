@@ -7,14 +7,19 @@ import manifestJSON from '__STATIC_CONTENT_MANIFEST';
 type Bindings = {
   DB: D1Database;
   __STATIC_CONTENT: KVNamespace;
-  ADMIN_PASSWORD?: string; // Environment variable
+  JWT_SECRET?: string;
+  ADMIN_PASSWORD?: string;
+};
+
+type Variables = {
+  user?: { id: number; username: string; name: string; role: string };
 };
 
 type OrderItem = {
   productId: string;
   quantity: number;
-  name?: string; // Optional coming from client, but we should fetch from DB
-  price?: number; // Optional, we will ignore/verify against DB
+  name?: string;
+  price?: number;
 };
 
 type OrderBody = {
@@ -23,11 +28,11 @@ type OrderBody = {
   payment_method?: string;
   status?: string;
   notes?: string;
-  subtotal?: number; // For reference/validation only
-  tax?: number;      // For reference/validation only
-  total?: number;    // For reference/validation only
-  userId?: number;   // ID of the user creating the order
-  userName?: string; // Name of the user creating the order
+  subtotal?: number;
+  tax?: number;
+  total?: number;
+  userId?: number;
+  userName?: string;
   customer_name?: string;
   customer_address?: string;
   customer_phone?: string;
@@ -35,48 +40,289 @@ type OrderBody = {
   payment_details?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 const assetManifest = JSON.parse(manifestJSON);
 
-// --- Middleware ---
+// ==========================================
+// 🔒 SECURITY INFRASTRUCTURE
+// ==========================================
+
+// --- Password Hashing (Web Crypto API / PBKDF2) ---
+const PBKDF2_ITERATIONS = 100000;
+const SALT_LENGTH = 16;
+const KEY_LENGTH = 32;
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    keyMaterial, KEY_LENGTH * 8
+  );
+  const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
+  const hashHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${saltHex}:${hashHex}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  // Support legacy plain-text passwords (no ':' separator)
+  if (!storedHash.includes(':')) {
+    return password === storedHash;
+  }
+  const [saltHex, hashHex] = storedHash.split(':');
+  const salt = new Uint8Array(saltHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    keyMaterial, KEY_LENGTH * 8
+  );
+  const computedHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return computedHex === hashHex;
+}
+
+// --- JWT (Stateless Token-Based Auth) ---
+const JWT_EXPIRY_SECONDS = 8 * 60 * 60; // 8 hours
+
+function getJwtSecret(c: any): string {
+  return c.env.JWT_SECRET || 'pos-kratom-default-secret-change-me-2026';
+}
+
+function base64UrlEncode(data: Uint8Array): string {
+  let binary = '';
+  data.forEach(byte => binary += String.fromCharCode(byte));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(str: string): Uint8Array {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  const binary = atob(str);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function signJWT(payload: any, secret: string): Promise<string> {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const now = Math.floor(Date.now() / 1000);
+  const fullPayload = { ...payload, iat: now, exp: now + JWT_EXPIRY_SECONDS };
+
+  const encoder = new TextEncoder();
+  const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
+  const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(fullPayload)));
+  const signingInput = `${headerB64}.${payloadB64}`;
+
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(signingInput));
+  const signatureB64 = base64UrlEncode(new Uint8Array(signature));
+
+  return `${signingInput}.${signatureB64}`;
+}
+
+async function verifyJWT(token: string, secret: string): Promise<any | null> {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+
+    const [headerB64, payloadB64, signatureB64] = parts;
+    const signingInput = `${headerB64}.${payloadB64}`;
+    const encoder = new TextEncoder();
+
+    const key = await crypto.subtle.importKey(
+      'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']
+    );
+    const signatureBytes = base64UrlDecode(signatureB64);
+    const isValid = await crypto.subtle.verify('HMAC', key, signatureBytes, encoder.encode(signingInput));
+
+    if (!isValid) return null;
+
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+
+    // Check expiry
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// --- Rate Limiter (In-Memory, Per-Worker) ---
+const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+const RATE_LIMIT_MAX = 5;       // Max 5 attempts
+const RATE_LIMIT_WINDOW = 60000; // per 60 seconds
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+  if (!record || (now - record.lastAttempt > RATE_LIMIT_WINDOW)) {
+    loginAttempts.set(ip, { count: 1, lastAttempt: now });
+    return false;
+  }
+  record.count++;
+  record.lastAttempt = now;
+  if (record.count > RATE_LIMIT_MAX) return true;
+  return false;
+}
+
+function resetRateLimit(ip: string): void {
+  loginAttempts.delete(ip);
+}
+
+// --- Order Rate Limiter (Anti-Spam) ---
+const orderAttempts = new Map<string, { count: number; lastAttempt: number }>();
+const ORDER_RATE_MAX = 10;        // Max 10 orders
+const ORDER_RATE_WINDOW = 60000;  // per 60 seconds
+
+function isOrderRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const record = orderAttempts.get(ip);
+  if (!record || (now - record.lastAttempt > ORDER_RATE_WINDOW)) {
+    orderAttempts.set(ip, { count: 1, lastAttempt: now });
+    return false;
+  }
+  record.count++;
+  record.lastAttempt = now;
+  if (record.count > ORDER_RATE_MAX) return true;
+  return false;
+}
+
+// --- Input Validation Helpers ---
+const MAX_SLIP_SIZE = 500 * 1024; // 500KB max for Base64 slip images
+
+function sanitizeString(input: any, maxLength: number = 500): string {
+  if (typeof input !== 'string') return '';
+  return input.trim().slice(0, maxLength);
+}
+
+function validatePaymentMethod(method: string): boolean {
+  return ['cash', 'promptpay', 'transfer'].includes(method);
+}
+
+function validateOrderStatus(status: string): boolean {
+  return ['completed', 'pending_verification', 'cancelled'].includes(status);
+}
+
+// ==========================================
+// 🛡️ MIDDLEWARE
+// ==========================================
+
+// CORS
 app.use('/api/*', cors());
 
-// --- Utilities ---
+// Secure Headers (Anti-XSS, Anti-Clickjacking, HSTS)
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('X-XSS-Protection', '1; mode=block');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Permissive CSP for POS app (needs inline scripts for Bootstrap/SweetAlert)
+  c.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https://cdn-icons-png.flaticon.com; connect-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com https://cdn-icons-png.flaticon.com;");
+});
+
+// JWT Auth Middleware (protects sensitive routes)
+const requireAuth = async (c: any, next: () => Promise<void>) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return errorResponse(c, 'Unauthorized: No token provided', 401);
+  }
+  const token = authHeader.slice(7);
+  const payload = await verifyJWT(token, getJwtSecret(c));
+  if (!payload) {
+    return errorResponse(c, 'Unauthorized: Invalid or expired token', 401);
+  }
+  c.set('user', payload);
+  await next();
+};
+
+// Role-based middleware factory
+const requireRole = (...roles: string[]) => {
+  return async (c: any, next: () => Promise<void>) => {
+    const user = c.get('user');
+    if (!user || !roles.includes(user.role)) {
+      return errorResponse(c, 'Forbidden: Insufficient permissions', 403);
+    }
+    await next();
+  };
+};
+
+// --- General Utilities ---
 const generateId = (prefix: string) => {
-  const datePart = new Date().toISOString().replace(/[-:T.]/g, '').slice(2, 14); // YYMMDDHHMMSS
+  const datePart = new Date().toISOString().replace(/[-:T.]/g, '').slice(2, 14);
   const randomPart = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
   return `${prefix}${datePart}${randomPart}`;
 };
 
-// Helper: Standardized Error Response
 const errorResponse = (c: any, message: string, status: number = 400) => {
   return c.json({ success: false, message: message, error: message }, status);
 };
 
-// --- Auth API ---
-// --- Auth API ---
+// ==========================================
+// 🔑 AUTH API (Rate Limited + JWT)
+// ==========================================
 app.post('/api/auth/login', async (c) => {
   try {
-    const { username, password } = await c.req.json();
+    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
 
+    // Rate Limiting Check
+    if (isRateLimited(ip)) {
+      return errorResponse(c, 'Too many login attempts. Please wait 60 seconds.', 429);
+    }
+
+    const { username, password } = await c.req.json();
     if (!username || !password) return errorResponse(c, 'Missing credentials', 400);
 
-    // Check against DB
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(sanitizeString(username, 50)).first();
 
-    if (!user || user.password !== password) {
+    if (!user) {
+      // Log failed login (unknown user)
+      try { await c.env.DB.prepare('INSERT INTO login_log (username, success, ip_address, user_agent) VALUES (?, 0, ?, ?)').bind(sanitizeString(username, 50), ip, (c.req.header('User-Agent') || '').substring(0, 200)).run(); } catch (_) { }
       return errorResponse(c, 'Invalid Credentials', 401);
     }
 
-    // Return User Info (exclude password)
+    // Verify password (supports both hashed and legacy plain-text)
+    const isValid = await verifyPassword(password, user.password);
+    if (!isValid) {
+      // Log failed login (wrong password)
+      try { await c.env.DB.prepare('INSERT INTO login_log (username, success, ip_address, user_agent) VALUES (?, 0, ?, ?)').bind(user.username, ip, (c.req.header('User-Agent') || '').substring(0, 200)).run(); } catch (_) { }
+      return errorResponse(c, 'Invalid Credentials', 401);
+    }
+
+    // Auto-migrate legacy plain-text password to hashed
+    if (!user.password.includes(':')) {
+      const hashedPw = await hashPassword(password);
+      await c.env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(hashedPw, user.id).run();
+    }
+
+    // Reset rate limit on successful login
+    resetRateLimit(ip);
+
+    // Generate JWT Token
+    const tokenPayload = {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role
+    };
+    const token = await signJWT(tokenPayload, getJwtSecret(c));
+
+    // Log successful login
+    try { await c.env.DB.prepare('INSERT INTO login_log (username, success, ip_address, user_agent) VALUES (?, 1, ?, ?)').bind(user.username, ip, (c.req.header('User-Agent') || '').substring(0, 200)).run(); } catch (_) { }
+
     return c.json({
       success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        role: user.role
-      }
+      token,
+      user: tokenPayload
     });
 
   } catch (e: any) {
@@ -84,8 +330,46 @@ app.post('/api/auth/login', async (c) => {
   }
 });
 
-// --- User Management API ---
-app.get('/api/users', async (c) => {
+// Verify Token Endpoint (for frontend session check)
+app.get('/api/auth/verify', requireAuth, async (c) => {
+  const user = c.get('user');
+  return c.json({ success: true, valid: true, user });
+});
+
+// Login Audit Log (Owner only)
+app.get('/api/login-log', requireAuth, requireRole('owner'), async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      'SELECT * FROM login_log ORDER BY timestamp DESC LIMIT 100'
+    ).all();
+    return c.json(results);
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
+// Password Migration Endpoint (Owner only - one-time use)
+app.post('/api/auth/migrate-passwords', requireAuth, requireRole('owner'), async (c) => {
+  try {
+    const { results: users }: any = await c.env.DB.prepare('SELECT id, password FROM users').all();
+    let migrated = 0;
+    for (const user of users) {
+      if (!user.password.includes(':')) {
+        const hashedPw = await hashPassword(user.password);
+        await c.env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(hashedPw, user.id).run();
+        migrated++;
+      }
+    }
+    return c.json({ success: true, message: `Migrated ${migrated} password(s) to secure hash` });
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
+// ==========================================
+// 👥 USER MANAGEMENT (Owner Only)
+// ==========================================
+app.get('/api/users', requireAuth, requireRole('owner'), async (c) => {
   try {
     const { results } = await c.env.DB.prepare("SELECT id, username, name, role, created_at FROM users ORDER BY id").all();
     return c.json(results);
@@ -94,31 +378,41 @@ app.get('/api/users', async (c) => {
   }
 });
 
-app.post('/api/users', async (c) => {
+app.post('/api/users', requireAuth, requireRole('owner'), async (c) => {
   try {
     const body = await c.req.json();
     if (!body.username || !body.password || !body.name || !body.role) {
       return errorResponse(c, 'Missing required fields');
     }
+    // Hash the password before storing
+    const hashedPassword = await hashPassword(body.password);
     await c.env.DB.prepare(
       "INSERT INTO users (username, password, name, role) VALUES (?, ?, ?, ?)"
-    ).bind(body.username, body.password, body.name, body.role).run();
+    ).bind(
+      sanitizeString(body.username, 50),
+      hashedPassword,
+      sanitizeString(body.name, 100),
+      sanitizeString(body.role, 20)
+    ).run();
     return c.json({ success: true, message: 'User created' }, 201);
   } catch (e: any) {
-    return errorResponse(c, e.message, 500); // Check for UNIQUE constraint violation
+    return errorResponse(c, e.message, 500);
   }
 });
 
-app.put('/api/users/:id', async (c) => {
+app.put('/api/users/:id', requireAuth, requireRole('owner'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
     const updates = [];
     const params = [];
 
-    if (body.password) { updates.push("password = ?"); params.push(body.password); }
-    if (body.name) { updates.push("name = ?"); params.push(body.name); }
-    if (body.role) { updates.push("role = ?"); params.push(body.role); }
+    if (body.password) {
+      const hashedPassword = await hashPassword(body.password);
+      updates.push("password = ?"); params.push(hashedPassword);
+    }
+    if (body.name) { updates.push("name = ?"); params.push(sanitizeString(body.name, 100)); }
+    if (body.role) { updates.push("role = ?"); params.push(sanitizeString(body.role, 20)); }
 
     if (updates.length > 0) {
       params.push(id);
@@ -130,7 +424,7 @@ app.put('/api/users/:id', async (c) => {
   }
 });
 
-app.delete('/api/users/:id', async (c) => {
+app.delete('/api/users/:id', requireAuth, requireRole('owner'), async (c) => {
   try {
     const id = c.req.param('id');
     await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
@@ -140,8 +434,10 @@ app.delete('/api/users/:id', async (c) => {
   }
 });
 
-// --- Analytics API ---
-app.get('/api/analytics', async (c) => {
+// ==========================================
+// 📊 ANALYTICS (Owner + Staff)
+// ==========================================
+app.get('/api/analytics', requireAuth, async (c) => {
   try {
     const startDate = c.req.query('startDate');
     const endDate = c.req.query('endDate');
@@ -150,18 +446,15 @@ app.get('/api/analytics', async (c) => {
     const params: any[] = [];
 
     if (startDate && endDate) {
-      // Use SQLite date() function for robust YYYY-MM-DD comparison
       dateFilter = `WHERE date(created_at) >= ? AND date(created_at) <= ?`;
-      params.push(startDate, endDate);
+      params.push(sanitizeString(startDate, 10), sanitizeString(endDate, 10));
     }
 
-    const queryParams = params.length > 0 ? params : undefined;
     const bindQuery = (q: string) => {
       const stmt = c.env.DB.prepare(q);
       return params.length > 0 ? stmt.bind(...params) : stmt;
     };
 
-    // 1. KPIs
     const kpiQuery = `
             SELECT 
                 COUNT(id) as totalOrders,
@@ -171,7 +464,6 @@ app.get('/api/analytics', async (c) => {
         `;
     const kpiResult: any = await bindQuery(kpiQuery).first();
 
-    // 2. Sales Trend (Daily)
     const trendQuery = `
             SELECT 
                 STRFTIME('%Y-%m-%d', created_at) as date,
@@ -182,10 +474,6 @@ app.get('/api/analytics', async (c) => {
         `;
     const { results: salesTrend } = await bindQuery(trendQuery).all();
 
-    // 3. Detailed Stats (Top Products, Staff, etc.) via JS Aggregation
-    // 3. Optimized Stats via separate SQL queries (Faster than JS loop)
-
-    // Payment Stats
     const paymentQuery = `
         SELECT payment_method as name, COUNT(*) as count 
         FROM orders ${dateFilter} 
@@ -193,7 +481,6 @@ app.get('/api/analytics', async (c) => {
     `;
     const { results: paymentMethods } = await bindQuery(paymentQuery).all();
 
-    // Order Status
     const statusQuery = `
         SELECT status, COUNT(*) as count 
         FROM orders ${dateFilter} 
@@ -201,7 +488,6 @@ app.get('/api/analytics', async (c) => {
     `;
     const { results: orderStatus } = await bindQuery(statusQuery).all();
 
-    // Top Staff (By Sales Amount)
     const staffQuery = `
         SELECT created_by_name as name, SUM(total) as total 
         FROM orders ${dateFilter} 
@@ -211,10 +497,8 @@ app.get('/api/analytics', async (c) => {
     `;
     const { results: topStaff } = await bindQuery(staffQuery).all();
 
-    // Safer Filter for joins
     const joinFilter = startDate && endDate ? `WHERE date(o.created_at) >= ? AND date(o.created_at) <= ?` : '';
 
-    // Top Products (using order_items + products tables)
     const finalProductQuery = `
         SELECT p.name, SUM(oi.quantity) as quantity, SUM(oi.quantity * oi.price_at_time) as total
         FROM order_items oi
@@ -227,7 +511,6 @@ app.get('/api/analytics', async (c) => {
     `;
     const { results: topProducts } = await bindQuery(finalProductQuery).all();
 
-    // Category Sales (using order_items + products)
     const categoryQuery = `
         SELECT p.category as name, SUM(oi.quantity * oi.price_at_time) as total
         FROM order_items oi
@@ -238,7 +521,6 @@ app.get('/api/analytics', async (c) => {
     `;
     const { results: categorySales } = await bindQuery(categoryQuery).all();
 
-    // Total Products Sold
     const totalProductsQuery = `
         SELECT SUM(oi.quantity) as total
         FROM order_items oi
@@ -248,8 +530,6 @@ app.get('/api/analytics', async (c) => {
     const totalProductsResult: any = await bindQuery(totalProductsQuery).first();
     const totalProductsSold = totalProductsResult?.total || 0;
 
-    // Gross Profit (Still needs JSON parsing as 'cost' is only in JSON snapshot)
-    // Optimization: Fetch ONLY the items column to reduce bandwidth
     const profitQuery = `SELECT items FROM orders ${dateFilter}`;
     const { results: orderItemsBlob } = await bindQuery(profitQuery).all();
 
@@ -267,13 +547,6 @@ app.get('/api/analytics', async (c) => {
     const grossProfit = totalSales - totalCost;
 
     return c.json({
-      debug: {
-        startDate, endDate,
-        dateFilter,
-        params,
-        kpiSQL: kpiQuery,
-        kpiResultRaw: kpiResult
-      },
       kpi: {
         totalOrders: kpiResult?.totalOrders || 0,
         totalSales: totalSales,
@@ -316,7 +589,7 @@ app.get('/api/products/:id', async (c) => {
 });
 
 // Create product
-app.post('/api/products', async (c) => {
+app.post('/api/products', requireAuth, requireRole('owner'), async (c) => {
   try {
     const body = await c.req.json();
 
@@ -360,7 +633,7 @@ app.post('/api/products', async (c) => {
 });
 
 // Update product
-app.put('/api/products/:id', async (c) => {
+app.put('/api/products/:id', requireAuth, requireRole('owner'), async (c) => {
   try {
     const id = c.req.param('id');
     const body: any = await c.req.json();
@@ -429,7 +702,7 @@ app.put('/api/products/:id', async (c) => {
 });
 
 // Delete product
-app.delete('/api/products/:id', async (c) => {
+app.delete('/api/products/:id', requireAuth, requireRole('owner'), async (c) => {
   try {
     const id = c.req.param('id');
     await c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
@@ -439,10 +712,83 @@ app.delete('/api/products/:id', async (c) => {
   }
 });
 
+// --- Inventory API ---
+
+// Get inventory log
+app.get('/api/inventory', requireAuth, async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      'SELECT * FROM inventory_log ORDER BY timestamp DESC LIMIT 200'
+    ).all();
+    return c.json(results);
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
+// Adjust stock manually
+app.post('/api/inventory/adjust', requireAuth, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { product_id, quantity, action, reference } = body;
+
+    if (!product_id || quantity === undefined || !action) {
+      return errorResponse(c, 'Missing required fields: product_id, quantity, action');
+    }
+
+    const qty = parseInt(quantity);
+    if (isNaN(qty) || qty === 0) {
+      return errorResponse(c, 'Quantity must be a non-zero number');
+    }
+
+    // Get current product
+    const product: any = await c.env.DB.prepare(
+      'SELECT id, name, stock FROM products WHERE id = ?'
+    ).bind(product_id).first();
+
+    if (!product) {
+      return errorResponse(c, 'Product not found', 404);
+    }
+
+    const newStock = product.stock + qty;
+    if (newStock < 0) {
+      return errorResponse(c, `Cannot reduce stock below 0. Current stock: ${product.stock}`);
+    }
+
+    const user = c.get('user');
+    const refText = sanitizeString(reference || '', 200) || `manual_adjust_by_${user?.name || 'unknown'}`;
+
+    // Update stock + log
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(newStock, product_id),
+      c.env.DB.prepare(
+        `INSERT INTO inventory_log (action, product_id, product_name, quantity_change, new_stock, reference)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(
+        sanitizeString(action, 50),
+        product_id,
+        product.name,
+        qty,
+        newStock,
+        refText
+      )
+    ]);
+
+    return c.json({
+      success: true,
+      message: `Stock adjusted: ${product.name} ${qty > 0 ? '+' : ''}${qty} → ${newStock}`,
+      newStock
+    });
+  } catch (e: any) {
+    return errorResponse(c, e.message, 500);
+  }
+});
+
 // --- Orders API ---
 
-// Get orders
-app.get('/api/orders', async (c) => {
+// Get orders (Auth required - protects customer data)
+app.get('/api/orders', requireAuth, async (c) => {
   try {
     const { results } = await c.env.DB.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100').all();
     return c.json(results);
@@ -451,14 +797,25 @@ app.get('/api/orders', async (c) => {
   }
 });
 
-// Create Order (CRITICAL SECURITY FIX)
+// Create Order (Rate Limited + Validated)
 app.post('/api/orders', async (c) => {
   try {
+    // Rate limit order creation
+    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
+    if (isOrderRateLimited(ip)) {
+      return errorResponse(c, 'Too many orders. Please wait before placing another order.', 429);
+    }
+
     const body: OrderBody = await c.req.json();
     const items = body.items || [];
 
     if (items.length === 0) {
       return errorResponse(c, 'No items in order');
+    }
+
+    // Validate slip_image size (prevent oversized uploads)
+    if (body.slip_image && body.slip_image.length > MAX_SLIP_SIZE) {
+      return errorResponse(c, 'Slip image too large. Maximum 500KB allowed.', 413);
     }
 
     // 1. Verify Prices and Stock Server-Side
@@ -565,7 +922,7 @@ app.post('/api/orders', async (c) => {
 });
 
 // Update Order Status (Admin Verification)
-app.patch('/api/orders/:id/status', async (c) => {
+app.patch('/api/orders/:id/status', requireAuth, async (c) => {
   try {
     const id = c.req.param('id');
     const { status } = await c.req.json();
@@ -585,7 +942,7 @@ app.patch('/api/orders/:id/status', async (c) => {
 
 
 // Delete Order (With Stock Restoration)
-app.delete('/api/orders/:id', async (c) => {
+app.delete('/api/orders/:id', requireAuth, requireRole('owner'), async (c) => {
   try {
     const id = c.req.param('id');
 
@@ -645,14 +1002,31 @@ app.delete('/api/orders/:id', async (c) => {
 });
 
 // --- Settings API ---
+// Public settings (safe for guests: store_name, currency, discount_rate)
+const PUBLIC_SETTINGS = ['store_name', 'currency', 'discount_rate', 'receipt_header', 'receipt_footer'];
+
 app.get('/api/settings', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM settings').all();
   const settings: any = {};
-  results.forEach((row: any) => settings[row.key] = row.value);
+
+  // Check if user is authenticated
+  const authHeader = c.req.header('Authorization');
+  let isAuthenticated = false;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const payload = await verifyJWT(authHeader.slice(7), getJwtSecret(c));
+    isAuthenticated = !!payload;
+  }
+
+  results.forEach((row: any) => {
+    // Only expose safe settings to guests
+    if (isAuthenticated || PUBLIC_SETTINGS.includes(row.key)) {
+      settings[row.key] = row.value;
+    }
+  });
   return c.json(settings);
 });
 
-app.post('/api/settings', async (c) => {
+app.post('/api/settings', requireAuth, requireRole('owner'), async (c) => {
   try {
     const body = await c.req.json();
     const statements = [];
@@ -677,7 +1051,7 @@ app.post('/api/settings', async (c) => {
 });
 
 // --- Dashboard Stats ---
-app.get('/api/stats', async (c) => {
+app.get('/api/stats', requireAuth, async (c) => {
   try {
     const productCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM products').first('count');
     const orderCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM orders').first('count');
@@ -732,23 +1106,10 @@ app.get('*', async (c) => {
       waitUntil: (promise: Promise<any>) => executionCtx.waitUntil(promise)
     };
 
-    const response = await getAssetFromKV(fetchEvent as any, {
+    return await getAssetFromKV(fetchEvent as any, {
       ASSET_NAMESPACE: c.env.__STATIC_CONTENT,
       ASSET_MANIFEST: assetManifest
     });
-
-    // Disable caching for HTML files to ensure PWA updates
-    if (c.req.path.endsWith('.html') || c.req.path === '/' || c.req.path.endsWith('sw.js')) {
-      const newHeaders = new Headers(response.headers);
-      newHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: newHeaders
-      });
-    }
-
-    return response;
   } catch (e) {
     return c.text('Not Found', 404);
   }

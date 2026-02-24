@@ -77,9 +77,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (recentOrders) recentOrders.style.display = 'none';
 
-        const statsBar = document.getElementById('stats-bar');
-        if (statsBar) statsBar.style.display = 'none';
-
         if (loginBtn) loginBtn.style.display = 'inline-block';
         if (profileMenu) profileMenu.style.display = 'none';
 
@@ -190,29 +187,38 @@ function calculateChange() {
     }
 }
 
-function handleSlipUpload(input) {
+async function handleSlipUpload(input) {
     if (input.files && input.files[0]) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            currentSlip = e.target.result;
-            const preview = document.getElementById('slip-preview');
+        const preview = document.getElementById('slip-preview');
+        if (preview) {
+            preview.style.opacity = '0.5';
+        }
+
+        try {
+            const compressed = await compressImage(input.files[0], 1280, 1280, 0.7);
+            currentSlip = compressed;
+
             if (preview) {
                 preview.src = currentSlip;
                 preview.style.display = 'block';
+                preview.style.opacity = '1';
             }
-        };
-        reader.readAsDataURL(input.files[0]);
+        } catch (error) {
+            console.error('Compression failed:', error);
+            Swal.fire('Error', 'ไม่สามารถบีบอัดรูปภาพได้ กรุณาลองใหม่', 'error');
+        }
     }
 }
 
 function fetchAllData() {
     const statsBar = document.getElementById('stats-bar');
+    const user = getUser();
     if (statsBar) {
-        statsBar.style.setProperty('display', getUser() ? 'block' : 'none', 'important');
+        statsBar.style.display = user ? 'flex' : 'none';
     }
 
     fetchProducts();
-    fetchOrders();
+    if (user) fetchOrders(); // Orders require auth
     fetchSettings();
 }
 
@@ -418,7 +424,6 @@ function showProductQuickView(productId) {
                      style="width: 150px; height: 150px; object-fit: cover; border-radius: 12px; margin-bottom: 1rem;">
             </div>
             <div class="text-start">
-                <p><strong>รหัส:</strong> ${product.sku || product.id}</p>
                 <p><strong>ราคา:</strong> ${formatCurrency(getPrice(product))}</p>
                 <p><strong>คงเหลือ:</strong> <span class="text-${stockColor}">${product.stock} ${product.unit}</span> (${stockStatus})</p>
                 <p><strong>หมวดหมู่:</strong> ${product.category || 'ทั่วไป'}</p>
@@ -512,7 +517,6 @@ function renderProductGrid() {
             ${imageHtml}
             <div class="product-price">${formatCurrency(getPrice(product))}</div>
             <div class="product-name">${product.name}</div>
-            <div class="product-code">${product.sku || product.id}</div>
             <div class="product-stock ${stockClass}">
                 ${stockText} (${product.stock} ${product.unit})
             </div>
@@ -719,6 +723,9 @@ function updateCart() {
     const checkoutBtn = document.getElementById('checkout-btn');
 
     if (!container) return;
+
+    // Update mobile cart badges
+    updateMobileCartBadge();
 
     if (cart.length === 0) {
         container.innerHTML = `
@@ -947,6 +954,12 @@ async function checkout(guestData = null) {
 }
 
 async function showGuestCheckoutModal() {
+    // Automatically close mobile cart if open
+    const cartCol = document.getElementById('cart-column');
+    if (cartCol && cartCol.classList.contains('mobile-cart-open')) {
+        toggleMobileCart();
+    }
+
     const { value: formValues } = await Swal.fire({
         title: 'ข้อมูลจัดส่ง (Guest Mode)',
         html: `
@@ -1143,3 +1156,165 @@ function setupViewModeToggle() {
         toggle.addEventListener('change', renderProductGrid);
     }
 }
+
+// ============================
+// === MOBILE UI FUNCTIONS ===
+// ============================
+
+function toggleMobileCart() {
+    const cartCol = document.getElementById('cart-column');
+    const overlay = document.getElementById('mobile-cart-overlay');
+    if (!cartCol || !overlay) return;
+
+    const isOpen = cartCol.classList.contains('mobile-cart-open');
+    if (isOpen) {
+        cartCol.classList.remove('mobile-cart-open');
+        overlay.classList.remove('active');
+    } else {
+        cartCol.classList.add('mobile-cart-open');
+        overlay.classList.add('active');
+    }
+}
+
+function updateMobileCartBadge() {
+    const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const badges = ['mobile-cart-badge', 'mobile-nav-badge'];
+    badges.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = totalItems > 0 ? totalItems : '';
+            el.setAttribute('data-count', totalItems);
+        }
+    });
+
+    // Update bottom nav account link based on login state
+    const accountNav = document.getElementById('mobile-nav-account');
+    if (accountNav) {
+        const user = getUser();
+        if (user) {
+            accountNav.href = '#';
+            accountNav.querySelector('span').textContent = user.name || 'บัญชี';
+            accountNav.onclick = function (e) {
+                e.preventDefault();
+                Swal.fire({
+                    title: user.name,
+                    html: `
+                        <div class="mb-3">
+                            <small class="text-secondary">${user.role === 'owner' ? 'เจ้าของร้าน' : user.role}</small>
+                        </div>
+                        <div class="d-grid gap-2 mb-2">
+                            <button class="btn btn-outline-secondary btn-sm" onclick="setTheme('dark')">
+                                <i class="bi bi-moon-stars me-2"></i>Dark Mode
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="setTheme('light')">
+                                <i class="bi bi-sun me-2"></i>Light Mode
+                            </button>
+                            <button class="btn btn-outline-success btn-sm" onclick="setTheme('modern-green')">
+                                <i class="bi bi-palette me-2"></i>Modern Green 2026
+                            </button>
+                        </div>
+                    `,
+                    icon: 'info',
+                    showCancelButton: true,
+                    confirmButtonText: 'ออกจากระบบ',
+                    cancelButtonText: 'ปิด',
+                    confirmButtonColor: '#ef4444'
+                }).then(result => {
+                    if (result.isConfirmed) logout();
+                });
+            };
+
+            // Helper function for Swal theme switching
+            window.setTheme = function (theme) {
+                const link = document.querySelector(`.dropdown-item[data-theme="${theme}"]`);
+                if (link) {
+                    link.click();
+                    Swal.close();
+                }
+            };
+        }
+    }
+}
+
+function scrollToSection(sectionId) {
+    // Tiny vibration for haptic feedback
+    if (navigator.vibrate) navigator.vibrate(10);
+
+    const el = document.getElementById(sectionId);
+    if (el) {
+        const offset = 70; // Offset for navbar
+        const bodyRect = document.body.getBoundingClientRect().top;
+        const elementRect = el.getBoundingClientRect().top;
+        const elementPosition = elementRect - bodyRect;
+        const offsetPosition = elementPosition - offset;
+
+        window.scrollTo({
+            top: offsetPosition,
+            behavior: 'smooth'
+        });
+    }
+}
+
+// Auto-update active nav on scroll
+function initScrollObserver() {
+    const sections = ['pos-system', 'category-filters'];
+    const navItems = {
+        'pos-system': document.querySelector('.mobile-nav-item[onclick*="pos-system"]'),
+        'category-filters': document.querySelector('.mobile-nav-item[onclick*="category-filters"]')
+    };
+
+    const options = {
+        root: null,
+        rootMargin: '-10% 0px -80% 0px', // Adjust to trigger when section is near top
+        threshold: 0
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const id = entry.target.id;
+                // Clear all active
+                document.querySelectorAll('.mobile-nav-item').forEach(item => item.classList.remove('active'));
+                // Set current active
+                if (navItems[id]) navItems[id].classList.add('active');
+            }
+        });
+    }, options);
+
+    sections.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) observer.observe(el);
+    });
+}
+
+// Call initScrollObserver when data is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(initScrollObserver, 2000); // Wait for dynamic content
+});
+
+// Search products by name (Mobile Search Bar)
+function filterProductsBySearch(query) {
+    const searchTerm = query.toLowerCase().trim();
+    const productCards = document.querySelectorAll('.product-card');
+
+    productCards.forEach(card => {
+        const productName = card.querySelector('.product-name').textContent.toLowerCase();
+        if (productName.includes(searchTerm)) {
+            card.style.display = '';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    // If search term is empty, respect the current category selection
+    if (searchTerm === '') {
+        const activeCategory = document.querySelector('#category-filters .btn.btn-success');
+        if (activeCategory) {
+            const categoryName = activeCategory.textContent.trim();
+            if (categoryName !== 'ทั้งหมด') {
+                filterProducts(categoryName);
+            }
+        }
+    }
+}
+
